@@ -1,12 +1,13 @@
 This directory contains a Rocq formalization of "Definitional Inversion, Without Normalisation"
 
-It compiles using The Rocq Prover, version 9.0.1
+The repository compiles using The Rocq Prover, version 9.0.1
+
+See [three-way-comparison](three-way-comparison.md) for an overview of the proof structure.
 
 Building this proof requires first installing the following 
 packages via OPAM:
-```
-rocq-hierarchy-builder
-rocq-autosubst-ocaml 
-rocq-smpl  
-```
+
+    rocq-hierarchy-builder
+    rocq-autosubst-ocaml 
+    rocq-smpl  
 
