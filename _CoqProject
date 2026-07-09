@@ -1,0 +1,26 @@
+-R src Domains
+
+src/utils/tactics.v
+src/utils/basics.v
+src/utils/decision.v
+src/utils/axioms.v
+src/utils/all.v
+
+src/autosubst/core.v
+src/autosubst/fintype.v
+
+src/syntax/syntax.v
+src/syntax/typing.v
+src/syntax/relations.v
+src/syntax/reduction.v
+
+src/finelt/utils.v
+src/finelt/findom.v
+src/finelt/types.v
+src/finelt/selection.v
+src/finelt/raw_semantics.v
+src/finelt/eval_substitution.v
+src/finelt/typing_semantics.v
+src/finelt/raw_validity.v
+src/finelt/adequacy.v
+
