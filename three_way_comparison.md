@@ -2,11 +2,9 @@
 
 A three-way comparison of the dependent-type-theory metatheory developments in
 
-- **Rocq** — this repository, `theories/examples/finelt/` + `theories/examples/syntax/`;
-- **Agda** — `~/github/agda/domain-semantics/{MIN,NAT}/` (the reference this Rocq
-  dev is ported from);
-- **Lean** — `~/github/lean/lean4lean/Lean4Lean/Experimental/` (the "shape"
-  logical relation inside [Lean4Lean](https://github.com/digama0/lean4lean)).
+- **Rocq** — this repository, `src/finelt/` + `src/syntax/`;
+- **Agda** — (the reference this Rocq dev is ported from);
+- **Lean** — (the Lean repository)
 
 All three prove metatheoretic results (canonicity/normalization-style facts,
 **Pi injectivity**, consistency) for a dependent type theory by building a
@@ -16,7 +14,7 @@ an ideal closed under head reduction.
 
 ## Scope and provenance
 
-| | Rocq `finelt` | Agda `MIN`/`NAT` | Lean `Lean4Lean` |
+| | Rocq `finelt` | Agda `MIN`/`NAT` | Lean  |
 |--|--|--|--|
 | Object theory | minimal: type-in-type (`wt tuniv tuniv`), Π, naturals (`ncase`) | minimal: Π + U (MIN); + naturals `Case`/`Y` (NAT) | the **actual Lean 4 kernel**: predicative universes, Π, inductives, definitional unfolding, proof irrelevance |
 | Universes | single `tuniv` (type-in-type) | single `U` (type-in-type) | full hierarchy `SLevel` with `imax`, `Sort u` |
@@ -24,9 +22,7 @@ an ideal closed under head reduction.
 
 ## File-by-file correspondence
 
-Corresponding source files across the three developments. Roots: Rocq
-`theories/examples/`, Agda `~/github/agda/domain-semantics/{MIN,NAT}/`, Lean
-`~/github/lean/lean4lean/Lean4Lean/Experimental/`. The granularity differs — Agda
+Corresponding source files across the three developments. The granularity differs — Agda
 splits into many small modules, Lean packs the whole model into three files — so
 several rows are one-to-many.
 
