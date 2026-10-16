@@ -82,6 +82,20 @@ Proof.
     all: split; auto.
     rewrite -> IHM in E1; eauto.
     rewrite -> IHM ; eauto.
+  - (* ncase — renaming commutes through the case branches *)
+    cbn. split.
+    + move=> [w [EM Hb]]. exists w. split.
+      * rewrite -> IHM1 in EM; eauto.
+      * destruct w as [ | | | | v | | | | | | | | ]; cbn in Hb |- *; try contradiction.
+        -- exact Hb.
+        -- rewrite -> IHM2 in Hb; eauto.
+        -- rewrite <- (IHM3 _ (up_ren ξ) _ (v .: ρ')). exact Hb. auto_case.
+    + move=> [w [EM Hb]]. exists w. split.
+      * rewrite -> IHM1; eauto.
+      * destruct w as [ | | | | v | | | | | | | | ]; cbn in Hb |- *; try contradiction.
+        -- exact Hb.
+        -- rewrite -> IHM2; eauto.
+        -- rewrite -> (IHM3 _ (up_ren ξ) (v .: ρ) (v .: ρ')). exact Hb. auto_case.
   - (* tpi *)
     cbn.
     destruct a; try done.
@@ -97,6 +111,83 @@ Proof.
     all: exists x; repeat split; auto.
     all: try rewrite IHM2 in E2; auto; try rewrite IHM2; eauto.
     all: auto_case.
+  - (* fix_: relabel the Kleene step through the renaming IH *)
+    cbn. split.
+    + move=> [k HA]. exists k. eapply Approx_mon; [ | exact HA ].
+      move=> p w Hst. exact (proj1 (IHM _ ξ ρ ρ' _ EQ) Hst).
+    + move=> [k HA]. exists k. eapply Approx_mon; [ | exact HA ].
+      move=> p w Hst. exact (proj2 (IHM _ ξ ρ ρ' _ EQ) Hst).
+  - (* tid: componentwise, no binders *)
+    cbn. destruct a; try done. split.
+    all: move=> [V [EA [E0 E1]]].
+    all: split; [ exact V | ].
+    all: try (rewrite -> IHM1 in EA; eauto);
+         try (rewrite -> IHM2 in E0; eauto);
+         try (rewrite -> IHM3 in E1; eauto).
+    all: split; [ | split ]; eauto.
+    all: try (rewrite -> IHM1; eauto);
+         try (rewrite -> IHM2; eauto);
+         try (rewrite -> IHM3; eauto).
+  - (* rfl *)
+    cbn. destruct a; try done. split.
+    + move=> H. rewrite -> IHM in H; eauto.
+    + move=> H. rewrite -> IHM; eauto.
+  - (* jcase — renaming commutes through the proof dispatch *)
+    cbn. split.
+    + move=> [w [EM Hb]]. exists w. split.
+      * rewrite -> IHM3 in EM; eauto.
+      * destruct w as [ | | | | | | | | v | | | | ]; cbn in Hb |- *; try contradiction.
+        -- exact Hb.
+        -- rewrite -> IHM2 in Hb; eauto.
+    + move=> [w [EM Hb]]. exists w. split.
+      * rewrite -> IHM3; eauto.
+      * destruct w as [ | | | | | | | | v | | | | ]; cbn in Hb |- *; try contradiction.
+        -- exact Hb.
+        -- rewrite -> IHM2; eauto.
+  - (* tsig: the [tpi] argument.  Same clause shape, but written with the iff
+       projections rather than copied from [tpi] -- that case's [all:]-chain
+       leans on how [destruct] happens to name the components. *)
+    cbn. destruct a; try done.
+    split.
+    + move=> [Va [Vf [ERa [a' [ERa' h]]]]].
+      split; [ exact Va | ]. split; [ exact Vf | ].
+      split; [ exact (proj1 (IHM1 _ ξ ρ ρ' _ EQ) ERa) | ].
+      exists a'. split; [ exact (proj1 (IHM1 _ ξ ρ ρ' _ EQ) ERa') | ].
+      move=> ui vi Vui APP.
+      destruct (h ui vi Vui APP) as [x [WTx [Lex E2]]].
+      have EQ2 : forall y, (x .: ρ) y = (x .: ρ') (up_ren ξ y) by auto_case.
+      exists x, WTx. split; [ exact Lex | ].
+      exact (proj1 (IHM2 _ (up_ren ξ) (x .: ρ) (x .: ρ') vi EQ2) E2).
+    + move=> [Va [Vf [ERa [a' [ERa' h]]]]].
+      split; [ exact Va | ]. split; [ exact Vf | ].
+      split; [ exact (proj2 (IHM1 _ ξ ρ ρ' _ EQ) ERa) | ].
+      exists a'. split; [ exact (proj2 (IHM1 _ ξ ρ ρ' _ EQ) ERa') | ].
+      move=> ui vi Vui APP.
+      destruct (h ui vi Vui APP) as [x [WTx [Lex E2]]].
+      have EQ2 : forall y, (x .: ρ) y = (x .: ρ') (up_ren ξ y) by auto_case.
+      exists x, WTx. split; [ exact Lex | ].
+      exact (proj2 (IHM2 _ (up_ren ξ) (x .: ρ) (x .: ρ') vi EQ2) E2).
+  - (* mkpair: componentwise, no binders *)
+    cbn. destruct a; try done.
+    split.
+    + move=> [V [E1 E2]].
+      split; [ exact V | ].
+      split; [ exact (proj1 (IHM1 _ ξ ρ ρ' _ EQ) E1)
+             | exact (proj1 (IHM2 _ ξ ρ ρ' _ EQ) E2) ].
+    + move=> [V [E1 E2]].
+      split; [ exact V | ].
+      split; [ exact (proj2 (IHM1 _ ξ ρ ρ' _ EQ) E1)
+             | exact (proj2 (IHM2 _ ξ ρ ρ' _ EQ) E2) ].
+  - (* pfst: the renaming passes straight through the projection *)
+    cbn. destruct (is_bot a); try done.
+    split.
+    + move=> [y E]. exists y. exact (proj1 (IHM _ ξ ρ ρ' _ EQ) E).
+    + move=> [y E]. exists y. exact (proj2 (IHM _ ξ ρ ρ' _ EQ) E).
+  - (* psnd *)
+    cbn. destruct (is_bot a); try done.
+    split.
+    + move=> [x E]. exists x. exact (proj1 (IHM _ ξ ρ ρ' _ EQ) E).
+    + move=> [x E]. exists x. exact (proj2 (IHM _ ξ ρ ρ' _ EQ) E).
 Qed.
 
 
@@ -170,11 +261,19 @@ Proof.
     destruct (is_bot u); try done.
     move: E => [h1 [a [L1 E1]]].
     eauto.
+  - (* ncase *)
+    move: E => [w [EM Hb]]. exists w. split.
+    + eapply IHM1; eauto.
+    + destruct w as [ | | | | v | | | | | | | | ]; try contradiction.
+      * exact Hb.
+      * eapply IHM2; eauto.
+      * have Vv : valid v := EvalRel_valid EM.
+        eapply IHM3; [ | | | exact Hb ]; eauto using valid_cons, SubRel_lift.
   - (* tpi *)
     destruct u; try done.
     move: E => [Vu [Vf [E1 [a0 [E0 h1]]]]].
     all: repeat split; eauto.
-    exists a0. 
+    exists a0.
     split. eapply IHM1; eauto.
 
     move=> ui vi Vui APP.
@@ -183,6 +282,47 @@ Proof.
     exists x. 
     repeat split; eauto.
     eauto using valid_cons, SubRel_lift.
+  - (* fix_: relabel the Kleene step through the substitution IH *)
+    move: E => [k HA]. exists k.
+    eapply Approx_mon; [ | exact HA ].
+    move=> p w Hst. eapply IHM; eauto.
+  - (* tid: componentwise *)
+    destruct u; try done.
+    move: E => [V [EA [E0 E1]]].
+    split; [ exact V | ].
+    split; [ eapply IHM1; eauto | ].
+    split; [ eapply IHM2; eauto | eapply IHM3; eauto ].
+  - (* rfl *)
+    destruct u; try done. eapply IHM; eauto.
+  - (* jcase *)
+    move: E => [w [EM Hb]]. exists w. split.
+    + eapply IHM3; eauto.
+    + destruct w as [ | | | | | | | | v | | | | ]; try contradiction.
+      * exact Hb.
+      * eapply IHM2; eauto.
+  - (* tsig: the [tpi] argument verbatim *)
+    destruct u; try done.
+    move: E => [Vs [Vfs [Es1 [as0 [Es0 hs1]]]]].
+    repeat split; eauto.
+    exists as0.
+    split. eapply IHM1; eauto.
+    move=> ui vi Vui APP.
+    destruct (hs1 _ _ Vui APP) as [x [Le [WT2 E2]]].
+    have Vx: valid x. eapply wt_valid_tm; eauto.
+    exists x.
+    repeat split; eauto.
+    eauto using valid_cons, SubRel_lift.
+  - (* mkpair: componentwise, as [tid] *)
+    destruct u; try done.
+    move: E => [Vp [Ep1 Ep2]].
+    split; [ exact Vp | ].
+    split; [ eapply IHM1; eauto | eapply IHM2; eauto ].
+  - (* pfst *)
+    destruct (is_bot u); try done.
+    move: E => [y Ey]. exists y. eapply IHM; eauto.
+  - (* psnd *)
+    destruct (is_bot u); try done.
+    move: E => [x Ex]. exists x. eapply IHM; eauto.
 Qed.
 
 (** Single-variable specialization: an approximation [u] of body [B] in an
@@ -291,6 +431,14 @@ Proof.
     destruct (is_bot u); try done.
     move: E => [h1 [a [L1 E1]]].
     eauto.
+  - (* ncase *)
+    move: E => [w [EM Hb]]. exists w. split.
+    + eapply IHM1; eauto.
+    + destruct w as [ | | | | v | | | | | | | | ]; try contradiction.
+      * exact Hb.
+      * eapply IHM2; eauto.
+      * have Vv : valid v := EvalRel_valid EM.
+        eapply IHM3; [ | | | exact Hb ]; eauto using valid_cons, MaxSubRel_lift.
   - (* tpi *)
     destruct u; try done.
     move: E => [Vf [Vu [E1 [a0 [E0 h1]]]]].
@@ -302,6 +450,46 @@ Proof.
     exists x. 
     repeat split; eauto.
     eauto using valid_cons, MaxSubRel_lift.
+  - (* fix_: relabel the Kleene step through the IH *)
+    move: E => [k HA]. exists k.
+    eapply Approx_mon; [ | exact HA ].
+    move=> p w Hst. eapply IHM; eauto.
+  - (* tid: componentwise *)
+    destruct u; try done.
+    move: E => [V [EA [E0 E1]]].
+    split; [ exact V | ].
+    split; [ eapply IHM1; eauto | ].
+    split; [ eapply IHM2; eauto | eapply IHM3; eauto ].
+  - (* rfl *)
+    destruct u; try done. eapply IHM; eauto.
+  - (* jcase *)
+    move: E => [w [EM Hb]]. exists w. split.
+    + eapply IHM3; eauto.
+    + destruct w as [ | | | | | | | | v | | | | ]; try contradiction.
+      * exact Hb.
+      * eapply IHM2; eauto.
+  - (* tsig: the [tpi] argument verbatim *)
+    destruct u; try done.
+    move: E => [Vfs [Vus [Es1 [as0 [Es0 hs1]]]]].
+    repeat split; eauto.
+    exists as0. split. eauto.
+    move=> ui vi Vui APP.
+    destruct (hs1 _ _ Vui APP) as [x [Le [WT2 E2]]].
+    have Vx: valid x. eapply wt_valid_tm; eauto.
+    exists x.
+    repeat split; eauto.
+    eauto using valid_cons, MaxSubRel_lift.
+  - (* mkpair: componentwise, as [tid] *)
+    destruct u; try done.
+    move: E => [Vp [Ep1 Ep2]].
+    split; [ exact Vp | ].
+    split; [ eapply IHM1; eauto | eapply IHM2; eauto ].
+  - (* pfst *)
+    destruct (is_bot u); try done.
+    move: E => [y Ey]. exists y. eapply IHM; eauto.
+  - (* psnd *)
+    destruct (is_bot u); try done.
+    move: E => [x Ex]. exists x. eapply IHM; eauto.
 Qed.
 
 (** * Forward substitution with witness environment
@@ -629,7 +817,7 @@ Proof.
     + cbn [EvalRel]. split; first exact Vu.
       rewrite singleton_env_lookup. by apply le_refl.
   - (* abs *)
-    destruct u as [| | | | | |l].
+    destruct u as [| | | | | |l| | | | | | ].
     1:{ (* bot *) exists bot_env. split; [|split].
         - by apply bot_env_valid.
         - by apply SubRel_bot_env.
@@ -697,19 +885,54 @@ Proof.
     move: (IHM _ _ _ _ Vρ ER1) => [ρ' [Vρ' [SR' ER']]].
     exists ρ'. split; [|split]; auto.
     cbn. rewrite Hb. split; auto. by exists a.
-  - (* nrec — no non-bot result *)
-    destruct (is_bot u) eqn:Hb; try done.
-    exists bot_env. split; [|split].
-    + by apply bot_env_valid.
-    + by apply SubRel_bot_env.
-    + cbn. by rewrite Hb.
+  - (* ncase — forward witness for case, assembled from the selected branch *)
+    move: E => [w [EM Hb]].
+    destruct w as [ | | | | v | | | | | | | | ]; cbn in Hb; try contradiction.
+    + (* bot: u = bot *)
+      move: Hb => [_ Lu]. apply le_bot_inv in Lu; subst u.
+      exists bot_env. split; [|split].
+      * by apply bot_env_valid.
+      * by apply SubRel_bot_env.
+      * apply EvalRel_bot.
+    + (* zero *)
+      move: (IHM1 _ _ _ _ Vρ EM) => [ρ0 [V0 [SR0 E0]]].
+      move: (IHM2 _ _ _ _ Vρ Hb) => [ρ1 [V1 [SR1 E1]]].
+      move: (@combine_fwd _ _ σ ρ ρ0 ρ1 Vρ V0 V1 SR0 SR1)
+        => [ρ' [Vρ' [SR' [LE0 LE1]]]].
+      exists ρ'. split; [ exact Vρ' | split; [ exact SR' | ] ].
+      cbn. exists zero. split.
+      * eapply EvalRel_mono_env; [ exact E0 | exact V0 | exact Vρ' | exact LE0 ].
+      * cbn. eapply EvalRel_mono_env; [ exact E1 | exact V1 | exact Vρ' | exact LE1 ].
+    + (* succ v *)
+      have Vv : valid v := EvalRel_valid EM.
+      move: (IHM1 _ _ _ _ Vρ EM) => [ρ0 [V0 [SR0 E0]]].
+      move: (IHM3 _ _ _ _ (valid_cons Vv Vρ) Hb) => [ρx [Vx [SRx Ex]]].
+      pose ρ_uv := fun y => ρx (Some y).
+      have Vρuv : valid_env ρ_uv by (move=> y; apply Vx).
+      have SRtail : SubRel σ ρ_uv ρ by (eapply SubRel_lift_inv; eauto).
+      move: (SubRel_lift_head SRx) => [Vp Lp].
+      have Vsp : valid (succ (ρx var_zero)) := Vp.
+      have Lsp : le (succ (ρx var_zero)) (succ v) by (rewrite le_succ; exact Lp).
+      have Ep : EvalRel M1 ρ0 (succ (ρx var_zero)) := EvalRel_down V0 Vsp E0 Lsp.
+      move: (@combine_fwd _ _ σ ρ ρ0 ρ_uv Vρ V0 Vρuv SR0 SRtail)
+        => [ρ' [Vρ' [SR' [LE0 LEuv]]]].
+      exists ρ'. split; [ exact Vρ' | split; [ exact SR' | ] ].
+      cbn. exists (succ (ρx var_zero)). split.
+      * eapply EvalRel_mono_env; [ exact Ep | exact V0 | exact Vρ' | exact LE0 ].
+      * cbn.
+        have V1' : valid_env ((ρx var_zero) .: ρ') := valid_cons Vp Vρ'.
+        have LEx : le_env ρx ((ρx var_zero) .: ρ').
+        { move=> [k|]; cbn.
+          - exact (LEuv k).
+          - apply le_refl; exact Vp. }
+        exact (EvalRel_mono_env Ex Vx V1' LEx).
   - (* tnat *)
     exists bot_env. split; [|split].
     + by apply bot_env_valid.
     + by apply SubRel_bot_env.
     + cbn. exact E.
   - (* tpi *)
-    destruct u as [| | | | |e l|].
+    destruct u as [| | | | |e l| | | | | | | ].
     1:{ (* bot *) exists bot_env. split; [|split].
         - by apply bot_env_valid.
         - by apply SubRel_bot_env.
@@ -757,6 +980,174 @@ Proof.
     + by apply bot_env_valid.
     + by apply SubRel_bot_env.
     + cbn. exact E.
+  - (* fix_: one witness environment for the whole approximant chain, by
+       combining the per-step witnesses with [combine_fwd] *)
+    move: E => [k HA].
+    have gen : forall k0 u0,
+        Approx (fun p w => EvalRel M[σ] ρ (p ↦ w)) k0 u0 ->
+        exists ρ', valid_env ρ' /\ SubRel σ ρ' ρ /\
+                   Approx (fun p w => EvalRel M ρ' (p ↦ w)) k0 u0.
+    { move=> k0. induction k0 as [ | k0 IH ]; move=> u0 H.
+      - exists bot_env. split; [ by apply bot_env_valid | ].
+        split; [ by apply SubRel_bot_env | exact H ].
+      - move: H => [p [Hp Hst]].
+        move: (IH p Hp) => [ρ1 [V1 [S1 A1]]].
+        move: (IHM _ σ ρ _ Vρ Hst) => [ρ2 [V2 [S2 E2]]].
+        move: (combine_fwd Vρ V1 V2 S1 S2) => [ρ3 [V3 [S3 [L1 L2]]]].
+        exists ρ3. split; [ exact V3 | split; [ exact S3 | ] ].
+        exists p. split.
+        + eapply Approx_mon; [ | exact A1 ].
+          move=> q w Hq.
+          eapply EvalRel_mono_env; [ exact Hq | exact V1 | exact V3 | exact L1 ].
+        + eapply EvalRel_mono_env; [ exact E2 | exact V2 | exact V3 | exact L2 ]. }
+    move: (gen k u HA) => [ρ' [V' [S' A']]].
+    exists ρ'. split; [ exact V' | split; [ exact S' | exists k; exact A' ] ].
+  - (* tid: three component witnesses, combined pairwise *)
+    destruct u as [ | | | | | | | t v w | | | | | ].
+    1:{ (* bot *) exists bot_env. split; [|split].
+        - by apply bot_env_valid.
+        - by apply SubRel_bot_env.
+        - by cbn. }
+    all: try (exfalso; cbn in E; done).
+    move: E => [Vu [EA [E0 E1]]].
+    move: (IHM1 _ _ _ _ Vρ EA) => [ρ1 [V1 [S1 F1]]].
+    move: (IHM2 _ _ _ _ Vρ E0) => [ρ2 [V2 [S2 F2]]].
+    move: (IHM3 _ _ _ _ Vρ E1) => [ρ3 [V3 [S3 F3]]].
+    move: (combine_fwd Vρ V1 V2 S1 S2) => [ρ12 [V12 [S12 [L1 L2]]]].
+    move: (combine_fwd Vρ V12 V3 S12 S3) => [ρ' [Vρ' [SR' [L12 L3]]]].
+    exists ρ'. split; [ exact Vρ' | split; [ exact SR' | ] ].
+    cbn. split; [ exact Vu | ].
+    split.
+    { eapply EvalRel_mono_env; [ exact F1 | exact V1 | exact Vρ' | ].
+      eapply le_env_trans;
+        [ exact V1 | exact V12 | exact Vρ' | exact L1 | exact L12 ]. }
+    split.
+    { eapply EvalRel_mono_env; [ exact F2 | exact V2 | exact Vρ' | ].
+      eapply le_env_trans;
+        [ exact V2 | exact V12 | exact Vρ' | exact L2 | exact L12 ]. }
+    eapply EvalRel_mono_env; [ exact F3 | exact V3 | exact Vρ' | exact L3 ].
+  - (* rfl: the witness of the witness *)
+    destruct u as [ | | | | | | | | w | | | | ].
+    1:{ exists bot_env. split; [|split].
+        - by apply bot_env_valid.
+        - by apply SubRel_bot_env.
+        - by cbn. }
+    all: try (exfalso; cbn in E; done).
+    move: (IHM _ _ _ _ Vρ E) => [ρ' [Vρ' [SR' F]]].
+    exists ρ'. split; [ exact Vρ' | split; [ exact SR' | exact F ] ].
+  - (* jcase — forward witness, assembled from the scrutinee and the edge *)
+    move: E => [w [EM Hb]].
+    destruct w as [ | | | | | | | | v | | | | ]; cbn in Hb; try contradiction.
+    + (* bot: u = bot *)
+      move: Hb => [_ Lu]. apply le_bot_inv in Lu; subst u.
+      exists bot_env. split; [|split].
+      * by apply bot_env_valid.
+      * by apply SubRel_bot_env.
+      * apply EvalRel_bot.
+    + (* rfl v: the branch is the edge [v ↦ u] of the base *)
+      move: (IHM3 _ _ _ _ Vρ EM) => [ρ0 [V0 [SR0 E0]]].
+      move: (IHM2 _ _ _ _ Vρ Hb) => [ρ1 [V1 [SR1 E1]]].
+      move: (@combine_fwd _ _ σ ρ ρ0 ρ1 Vρ V0 V1 SR0 SR1)
+        => [ρ' [Vρ' [SR' [LE0 LE1]]]].
+      exists ρ'. split; [ exact Vρ' | split; [ exact SR' | ] ].
+      cbn. exists (rfl v). split.
+      * eapply EvalRel_mono_env; [ exact E0 | exact V0 | exact Vρ' | exact LE0 ].
+      * cbn. eapply EvalRel_mono_env; [ exact E1 | exact V1 | exact Vρ' | exact LE1 ].
+  - (* tsig: the [tpi] case verbatim -- same clause, same [fold_edge_fwd] *)
+    destruct u as [| | | | | | | | |e l| | | ].
+    1:{ (* bot *) exists bot_env. split; [|split].
+        - by apply bot_env_valid.
+        - by apply SubRel_bot_env.
+        - by cbn. }
+    all: try (exfalso; cbn in E; done).
+    (* u = tsig e l *)
+    move: E => [Vu [Vf [EA [a0 [Ea0 body]]]]].
+    move: (IHM1 _ _ _ _ Vρ EA) => [ρA [VρA [SRρA EA']]].
+    move: (IHM1 _ σ ρ _ Vρ Ea0) => [ρA0 [VρA0 [SRρA0 EA0']]]. 
+    move: (combine_fwd Vρ VρA VρA0 SRρA SRρA0) => [ρA1 [VρA1 [SRρA1 [LEρA LEρA0]]]].
+    have body' : forall u' v', valid u' -> app l u' = v' ->
+      exists x (h: wt x a0) ρ_uv,
+        le x u' /\ valid_env ρ_uv /\
+        SubRel σ ρ_uv ρ /\
+        EvalRel M2 (x .: ρ_uv) v'.
+    { move=> u' v' Vu' APP.
+      move: (body u' v' Vu' APP) => [x [Wtx [Lx  Ev]]].
+      have Vx: valid x by eapply wt_valid_tm; eauto.
+      have Vxρ: valid_env (x .: ρ) by apply valid_cons.
+      move: (IHM2 _ _ _ _ Vxρ Ev) => [ρ_xv [Vρxv [SRxv ERxv]]].
+      pose ρ_uv := fun y => ρ_xv (Some y).
+      have Vρuv : valid_env ρ_uv by move=> y; apply Vρxv.
+      have SRtail : SubRel σ ρ_uv ρ by eapply SubRel_lift_inv; eauto.
+      move: (SubRel_lift_head SRxv) => [Vh Lh].
+      have ER' : EvalRel M2 (x .: ρ_uv) v'.
+      { have V1 : valid_env (x .: ρ_uv) := valid_cons Vx Vρuv.
+        have LE : le_env ρ_xv (x .: ρ_uv).
+        { move=> [k|]; cbn.
+          - apply le_refl. by apply Vρxv.
+          - exact Lh. }
+        exact (EvalRel_mono_env ERxv Vρxv V1 LE). }
+      fold fin in ρ_uv.
+      exists x, Wtx, ρ_uv. by repeat split. }
+    move: (@fold_edge_fwd _ _ σ ρ M2 a0 l ρA1 Vf Vρ VρA1 SRρA1 body')
+      => [ρ' [Vρ' [SRρ' [LEρ' bodyAll]]]].
+    exists ρ'. split; [|split]; first done.
+    { exact SRρ'. }
+    cbn. repeat split; eauto. 
+    eapply EvalRel_mono_env; eauto. eapply le_env_trans with (ρ2 := ρA1); eauto.
+    exists a0. split.
+    eapply EvalRel_mono_env; eauto.  eapply le_env_trans with (ρ2 := ρA1); eauto.
+    exact bodyAll.
+  - (* mkpair: two component witnesses, combined pairwise (as [tid]) *)
+    destruct u as [ | | | | | | | | | | x y | | ].
+    1:{ (* bot *) exists bot_env. split; [|split].
+        - by apply bot_env_valid.
+        - by apply SubRel_bot_env.
+        - by cbn. }
+    all: try (exfalso; cbn in E; done).
+    move: E => [Vu [E1 E2]].
+    move: (IHM1 _ _ _ _ Vρ E1) => [ρ1 [V1 [S1 F1]]].
+    move: (IHM2 _ _ _ _ Vρ E2) => [ρ2 [V2 [S2 F2]]].
+    move: (combine_fwd Vρ V1 V2 S1 S2) => [ρ' [Vρ' [SR' [L1 L2]]]].
+    exists ρ'. split; [ exact Vρ' | split; [ exact SR' | ] ].
+    cbn. split; [ exact Vu | ].
+    split.
+    { eapply EvalRel_mono_env; [ exact F1 | exact V1 | exact Vρ' | exact L1 ]. }
+    eapply EvalRel_mono_env; [ exact F2 | exact V2 | exact Vρ' | exact L2 ].
+  - (* pfst: one witness environment; the pair code is rebuilt around it *)
+    destruct (is_bot u) eqn:Hb.
+    { exists bot_env. split; [|split].
+      - by apply bot_env_valid.
+      - by apply SubRel_bot_env.
+      - cbn. by rewrite Hb. }
+    move: E => [y Ey].
+    move: (IHM _ _ _ _ Vρ Ey) => [ρ' [Vρ' [SR' F]]].
+    exists ρ'. split; [|split]; auto.
+    cbn. rewrite Hb. by exists y.
+  - (* psnd *)
+    destruct (is_bot u) eqn:Hb.
+    { exists bot_env. split; [|split].
+      - by apply bot_env_valid.
+      - by apply SubRel_bot_env.
+      - cbn. by rewrite Hb. }
+    move: E => [x Ex].
+    move: (IHM _ _ _ _ Vρ Ex) => [ρ' [Vρ' [SR' F]]].
+    exists ρ'. split; [|split]; auto.
+    cbn. rewrite Hb. by exists x.
+  - (* tprop: a code leaf, like [tuniv] *)
+    exists bot_env. split; [|split].
+    + by apply bot_env_valid.
+    + by apply SubRel_bot_env.
+    + cbn. exact E.
+  - (* tunit: the unit type code, a leaf like [tuniv] *)
+    exists bot_env. split; [|split].
+    + by apply bot_env_valid.
+    + by apply SubRel_bot_env.
+    + cbn. exact E.
+  - (* tstar: the unit element: [le b bot] forces [b = bot] *)
+    exists bot_env. split; [|split].
+    + by apply bot_env_valid.
+    + by apply SubRel_bot_env.
+    + cbn. exact E.
 Qed.
 
 (** ** EvalRel_subst1_forward as a corollary *)
@@ -788,3 +1179,104 @@ Proof.
       apply le_refl, Vv.
 Qed.
 
+
+
+(* ============================================================
+   The motive spine of [J].
+
+   [d : base_ty A C = tpi A (app (app (app C⟨↑⟩ 0) 0) (rfl 0))], so a value of
+   [d]'s Π-codomain is a value of the motive [C] applied to *one* code three
+   times over -- namely at codes below the selected argument [x].  The goal of
+   the [J] driver instead needs the motive applied to [a], [b] and [p].
+
+   They agree because of Coquand's membership rule: the proof's own value is an
+   [rfl wmax] with [wmax] below **both** endpoint codes, so [a] and [b] both
+   take [wmax], and every code below [x <= wmax] is therefore an approximation
+   of [a], of [b], and (wrapped in [rfl]) of [p].  This is the [EvalRel]-level
+   heart of the [J] case, shared by [InvTyp_J] (soundness) and [st_jcase]
+   (adequacy).
+   ============================================================ *)
+(* The strengthened form, which also hands back the three spine codes together
+   with the bounds that place them below the witness.  The adequacy driver needs
+   those bounds: the witness's *reducible* equalities to the endpoints live at
+   the witness's own code, so they can only be restricted to codes below it. *)
+Lemma EvalRel_base_cod_spine_codes {n} (C a b p : Tm n) (ρ : Env n) x wmax c :
+  valid_env ρ ->
+  valid x ->
+  le x wmax ->
+  EvalRel a ρ wmax ->
+  EvalRel b ρ wmax ->
+  EvalRel p ρ (rfl wmax) ->
+  is_bot c = false ->
+  EvalRel (Core.app (Core.app (Core.app C⟨↑⟩ (Core.var var_zero))
+                       (Core.var var_zero))
+             (Core.rfl (Core.var var_zero))) (x .: ρ) c ->
+  exists w1 w2 w3,
+       EvalRel C ρ (w3 ↦ (w2 ↦ (w1 ↦ c)))
+    /\ le w3 wmax /\ le w2 wmax /\ le w1 (rfl wmax)
+    /\ EvalRel a ρ w3 /\ EvalRel b ρ w2 /\ EvalRel p ρ w1.
+Proof.
+  move=> Vρ Vx Lxw Eaw Ebw Epw Bc EB.
+  have Vwmax : valid wmax by (move: (EvalRel_valid Epw); cbn; done).
+  (* peel the three application edges off the codomain *)
+  cbn [EvalRel] in EB. rewrite Bc in EB.
+  move: EB => [w1 [EB1 Erf]].
+  have NB1 : is_bot (w1 ↦ c) = false by (rewrite /singleton Bc).
+  rewrite NB1 in EB1. move: EB1 => [w2 [EB2 Ev2]].
+  have NB2 : is_bot (w2 ↦ (w1 ↦ c)) = false by (rewrite /singleton NB1).
+  rewrite NB2 in EB2. move: EB2 => [w3 [EB3 Ev3]].
+  cbn in Ev2, Ev3, Erf.
+  exists w1, w2, w3.
+  have G3 : EvalRel C ρ (w3 ↦ (w2 ↦ (w1 ↦ c)))
+    by (eapply EvalRel_unwk; exact EB3).
+  (* the three argument codes all sit below [x <= wmax] *)
+  have [Vw3 Lw3] := Ev3. have [Vw2 Lw2] := Ev2.
+  have L3 : le w3 wmax
+    by (eapply (@le_trans w3 x wmax);
+        [ exact Vw3 | exact Vx | exact Vwmax | exact Lw3 | exact Lxw ]).
+  have L2 : le w2 wmax
+    by (eapply (@le_trans w2 x wmax);
+        [ exact Vw2 | exact Vx | exact Vwmax | exact Lw2 | exact Lxw ]).
+  have [L1 Vw1] : le w1 (rfl wmax) /\ valid w1.
+  { destruct w1 as [ | | | | | | | | w0 | | | | ]; try solve [ destruct Erf ].
+    - (* the proof argument takes [bot] *) split; [ apply le_bot' | done ].
+    - move: Erf => [Vw0 Lw0]. split.
+      + apply le_rfl_intro. eapply (@le_trans w0 x wmax);
+          [ exact Vw0 | exact Vx | exact Vwmax | exact Lw0 | exact Lxw ].
+      + cbn; exact Vw0. }
+  split; [ exact G3 | ].
+  split; [ exact L3 | ]. split; [ exact L2 | ]. split; [ exact L1 | ].
+  (* ... and are therefore approximations of [a], [b] and [p] *)
+  split.
+  { eapply EvalRel_down; [ exact Vρ | exact Vw3 | exact Eaw | exact L3 ]. }
+  split.
+  { eapply EvalRel_down; [ exact Vρ | exact Vw2 | exact Ebw | exact L2 ]. }
+  eapply EvalRel_down; [ exact Vρ | exact Vw1 | exact Epw | exact L1 ].
+Qed.
+
+Lemma EvalRel_base_cod_spine {n} (C a b p : Tm n) (ρ : Env n) x wmax c :
+  valid_env ρ ->
+  valid x ->
+  le x wmax ->
+  EvalRel a ρ wmax ->
+  EvalRel b ρ wmax ->
+  EvalRel p ρ (rfl wmax) ->
+  EvalRel (Core.app (Core.app (Core.app C⟨↑⟩ (Core.var var_zero))
+                       (Core.var var_zero))
+             (Core.rfl (Core.var var_zero))) (x .: ρ) c ->
+  EvalRel (Core.app (Core.app (Core.app C a) b) p) ρ c.
+Proof.
+  move=> Vρ Vx Lxw Eaw Ebw Epw EB.
+  destruct (is_bot c) eqn:Bc.
+  { have Ec : c = bot by (destruct c; cbn in Bc; try discriminate; reflexivity).
+    rewrite Ec. apply EvalRel_bot. }
+  have [w1 [w2 [w3 [G3 [_ [_ [_ [Ga [Gb Gp]]]]]]]]] :=
+    EvalRel_base_cod_spine_codes Vρ Vx Lxw Eaw Ebw Epw Bc EB.
+  have NB1 : is_bot (w1 ↦ c) = false by (rewrite /singleton Bc).
+  have NB2 : is_bot (w2 ↦ (w1 ↦ c)) = false by (rewrite /singleton NB1).
+  have G2 : EvalRel (Core.app C a) ρ (w2 ↦ (w1 ↦ c)).
+  { cbn [EvalRel]. rewrite NB2. exists w3. split; [ exact G3 | exact Ga ]. }
+  have G1 : EvalRel (Core.app (Core.app C a) b) ρ (w1 ↦ c).
+  { cbn [EvalRel]. rewrite NB1. exists w2. split; [ exact G2 | exact Gb ]. }
+  cbn [EvalRel]. rewrite Bc. exists w1. split; [ exact G1 | exact Gp ].
+Qed.

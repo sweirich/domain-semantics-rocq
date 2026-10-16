@@ -43,11 +43,47 @@ Fixpoint lookup {n} (x : fin n) : Ctx n -> Tm n.
   - exact (X0⟨↑⟩).
 Defined.
 
-(* for nrec *)
-(*
+(* [x ↦ succ x]: the motive at the successor, used by [t_case] *)
+
 Definition rho {n} : fin (S n) -> Tm (S n) := 
    (succ (var var_zero) .: var >> ⟨↑⟩).
-*)
+
+
+(* ---- the derived Pi-types of the based-J eliminator ---------------------
+     motive_ty A   =  (x y : A) -> tid A x y -> U
+     base_ty A C   =  (x : A) -> C x x (rfl x)
+
+   Both are spelled out in de Bruijn form.  Inside [motive_ty] the variable
+   [x] is index 1 and [y] is index 0, so the identity type's own domain is [A]
+   weakened twice.  [jcase C d p] at [p : tid A a b] then has the binder-free
+   type [app (app (app C a) b) p], which substitutes definitionally -- that is
+   what makes the whole fragment cheap.                                     *)
+
+Definition motive_ty {n} (A : Tm n) : Tm n :=
+  tpi A (tpi A⟨↑⟩
+          (tpi (tid A⟨↑⟩⟨↑⟩ (var (shift var_zero)) (var var_zero)) tuniv)).
+
+Definition base_ty {n} (A C : Tm n) : Tm n :=
+  tpi A (app (app (app C⟨↑⟩ (var var_zero)) (var var_zero)) (rfl (var var_zero))).
+
+(* Both derived types commute with renaming and substitution (Agda
+   [ren-motiveTy] / [subst-motiveTy] / [ren-baseTy] / [subst-baseTy]).  Being
+   binder-free apart from the [tpi]s, they are pure [asimpl]. *)
+Lemma ren_motive_ty {n m} (δ : fin n -> fin m) (A : Tm n) :
+  (motive_ty A)⟨δ⟩ = motive_ty (A⟨δ⟩).
+Proof. unfold motive_ty. asimpl. reflexivity. Qed.
+
+Lemma subst_motive_ty {n m} (σ : fin n -> Tm m) (A : Tm n) :
+  (motive_ty A)[σ] = motive_ty (A[σ]).
+Proof. unfold motive_ty. asimpl. reflexivity. Qed.
+
+Lemma ren_base_ty {n m} (δ : fin n -> fin m) (A C : Tm n) :
+  (base_ty A C)⟨δ⟩ = base_ty (A⟨δ⟩) (C⟨δ⟩).
+Proof. unfold base_ty. asimpl. reflexivity. Qed.
+
+Lemma subst_base_ty {n m} (σ : fin n -> Tm m) (A C : Tm n) :
+  (base_ty A C)[σ] = base_ty (A[σ]) (C[σ]).
+Proof. unfold base_ty. asimpl. reflexivity. Qed.
 
 
 
@@ -80,13 +116,39 @@ Inductive typing : forall {n} (Γ : Ctx n), Tm n -> Tm n -> Prop :=
   | t_succ n (Γ : Ctx n) M : 
     typing Γ M tnat ->
     typing Γ (succ M) tnat 
-(*
-  | t_nrec n (Γ : Ctx n) (T U : Tm (S n)) M0 M1 :
-    typing (Γ ++ tnat) T tuniv ->
+  | t_case n (Γ : Ctx n) (T : Tm (S n)) M M0 M1 :
+    typing (ctx_extend Γ tnat) T tuniv ->
+    typing Γ M tnat ->
     typing Γ M0 (T[zero..]) ->
-    U = T[succ (var var_zero)..] ->
-    typing Γ M1 (tpi tnat U) ->       
-    typing Γ (nrec T M0 M1) (tpi tnat T) *)
+    typing (ctx_extend Γ tnat) M1 T[rho] ->
+    typing Γ (ncase M M0 M1) (T[M..])
+  (* fixpoints (Agda [ty-Y]): a step function [g : A -> A] has a fixpoint.
+     The codomain is [A⟨↑⟩] -- [A] weakened, i.e. no dependency on the
+     argument -- so [app g (fix_ g) : A⟨↑⟩[(fix_ g)..] = A]. *)
+  | t_fix n (Γ : Ctx n) A g :
+    typing Γ A tuniv ->
+    typing Γ g (tpi A A⟨↑⟩) ->
+    typing Γ (fix_ g) A
+  (* identity type (Agda [ty-Id]/[ty-Ref]/[ty-J]) *)
+  | t_tid n (Γ : Ctx n) A a b :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    typing Γ b A ->
+    typing Γ (tid A a b) tuniv
+  | t_rfl n (Γ : Ctx n) A a :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    typing Γ (rfl a) (tid A a a)
+  (* Martin-Lof's original J, with a fully dependent motive.  The result type
+     is binder-free, so no substitution commutation is needed anywhere. *)
+  | t_jcase n (Γ : Ctx n) A a b C d p :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    typing Γ b A ->
+    typing Γ C (motive_ty A) ->
+    typing Γ d (base_ty A C) ->
+    typing Γ p (tid A a b) ->
+    typing Γ (jcase C d p) (app (app (app C a) b) p)
   (* universes *)
   | t_tpi n (Γ : Ctx n) A B : 
     typing Γ A tuniv ->
@@ -95,6 +157,56 @@ Inductive typing : forall {n} (Γ : Ctx n), Tm n -> Tm n -> Prop :=
   | t_univ n (Γ : Ctx n) : 
     ctx Γ ->
     typing Γ tuniv tuniv
+  (* Sigma types (Agda [ty-Sigma]/[ty-MkPair]/[ty-Fst]/[ty-Snd]).
+     [psnd]'s type is [B] instantiated at the FIRST projection, which is what
+     makes the second component's type depend on the first. *)
+  | t_tsig n (Γ : Ctx n) A B :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ (tsig A B) tuniv
+  | t_mkpair n (Γ : Ctx n) A B M N :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M A ->
+    typing Γ N B[M..] ->
+    typing Γ (mkpair M N) (tsig A B)
+  | t_pfst n (Γ : Ctx n) A B M :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M (tsig A B) ->
+    typing Γ (pfst M) A
+  | t_psnd n (Γ : Ctx n) A B M :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M (tsig A B) ->
+    typing Γ (psnd M) B[(pfst M)..]
+
+  (* Prop fragment (Agda [ty-Prop]/[ty-Prop-U]/[ty-Pi-Prop]). *)
+  | t_prop n (Γ : Ctx n) :
+    ctx Γ ->
+    typing Γ tprop tuniv
+
+  (* Prop-to-U subtyping.  This is a second non-syntax-directed rule alongside
+     [t_conv], which is why the [typing_*_inv] family below has to offer the
+     second sort as an alternative. *)
+  | t_prop_u n (Γ : Ctx n) A :
+    typing Γ A tprop ->
+    typing Γ A tuniv
+
+  | t_tpi_prop n (Γ : Ctx n) A B :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tprop ->
+    typing Γ (tpi A B) tprop
+
+  (* Unit.  No eliminator: [c_unit_eta] below makes
+     any eliminator definable as a constant. *)
+  | t_unit n (Γ : Ctx n) :
+    ctx Γ ->
+    typing Γ tunit tuniv
+
+  | t_star n (Γ : Ctx n) :
+    ctx Γ ->
+    typing Γ tstar tunit
 with conv :forall {n} (Γ : Ctx n), Tm n -> Tm n -> Tm n -> Prop := 
   | c_conv n (Γ : Ctx n) M N A B : 
     conv Γ M N A -> 
@@ -135,19 +247,38 @@ with conv :forall {n} (Γ : Ctx n), Tm n -> Tm n -> Tm n -> Prop :=
     conv (ctx_extend Γ A) (app N⟨↑⟩ (var var_zero))
       (app N'⟨↑⟩ (var var_zero)) B ->
     conv Γ N N' (tpi A B)
+
   (* natural numbers: *)
-  (*
-  | c_nrec_Z n (Γ : Ctx n) M0 M1 (T : Tm (S n)) : 
-    typing  (Γ ++ tnat) T tuniv ->
+  
+  | c_ncase_Z n (Γ : Ctx n) M0 M1 (T : Tm (S n)) : 
+    typing (ctx_extend Γ  tnat) T tuniv ->
     typing Γ M0 (T[zero..]) ->
-    typing Γ M1 (tpi tnat T[(succ (var var_zero))..])) ->   
-    conv Γ (app (nrec T M0 M1) zero) M0 T[zero..]
-  | c_nrec_S n (Γ : Ctx n) T M0 M1 n : 
-    typing (Γ ++ tnat) T tuniv ->
+    typing (ctx_extend Γ tnat) M1 T[rho] ->   
+    conv Γ (ncase zero M0 M1) M0 T[zero..]
+
+  | c_ncase_S n (Γ : Ctx n) T M0 M1 N : 
+    typing (ctx_extend Γ tnat) T tuniv ->
+    typing Γ N tnat ->
     typing Γ M0 (T[zero..]) ->
-    typing Γ M1 (tpi tnat T[(succ (var var_zero))..])) ->    
-    conv Γ (app (nrec T M0 M1) (succ n)) 
-           (app M1 n) T[(succ n)..] *)
+    typing (ctx_extend Γ tnat) M1 T[rho] ->        
+    conv Γ (ncase (succ N) M0 M1) M1[N..] T[(succ N)..] 
+
+  | c_ncase n (Γ : Ctx n) T M M0 M1 M' M0' M1' : 
+    typing (ctx_extend Γ tnat) T tuniv ->
+    (* The successor branch of the *right* case must be typed, not merely
+       convertible to [M1].  Admissible (it follows from [conv_typing] applied
+       to the last premise), so the relation is unchanged; it is stated because
+       semantic adequacy needs [semantic_typing] of [M1'] -- the two sides of
+       the congruence reduce to the branch at *different* predecessor terms,
+       and only [semantic_typing] carries the required cross-substitution
+       information.  Compare [c_abs], which likewise carries typings for both
+       bodies. *)
+    typing (ctx_extend Γ tnat) M1' T[rho] ->
+    conv Γ M M' tnat ->
+    conv Γ M0 M0' T[zero..] ->
+    conv (ctx_extend Γ tnat) M1 M1' T[rho] ->        
+    conv Γ (ncase M M0 M1) (ncase M' M0' M1') T[M..]
+
   | c_succ n (Γ : Ctx n) M N :
     conv Γ M N tnat ->
     conv Γ (succ M) (succ N) tnat
@@ -160,6 +291,60 @@ with conv :forall {n} (Γ : Ctx n), Tm n -> Tm n -> Tm n -> Prop :=
     conv Γ A A' tuniv ->
     conv (ctx_extend Γ A) M M' B ->
     conv Γ (abs A M) (abs A' M') (tpi A B)
+  (* Y-unfolding (Agda [conv-Y]) and its congruence (Agda [conv-Y-cong]).
+     As with [c_abs], the congruence carries typings for both step functions;
+     they are admissible (via [conv_typing]) but semantic adequacy needs
+     [semantic_typing] of each side. *)
+  | c_fix n (Γ : Ctx n) A g :
+    typing Γ A tuniv ->
+    typing Γ g (tpi A A⟨↑⟩) ->
+    conv Γ (fix_ g) (app g (fix_ g)) A
+  | c_fix_cong n (Γ : Ctx n) A g g' :
+    typing Γ A tuniv ->
+    typing Γ g (tpi A A⟨↑⟩) ->
+    typing Γ g' (tpi A A⟨↑⟩) ->
+    conv Γ g g' (tpi A A⟨↑⟩) ->
+    conv Γ (fix_ g) (fix_ g') A
+  (* identity type: congruences and the J beta rule (Agda [conv-Id],
+     [conv-Ref], [conv-J], [conv-J-beta]).  As with [c_abs] and [c_fix_cong],
+     the congruences carry the left-hand sides' typings: they are admissible
+     via [conv_typing], but semantic adequacy needs [semantic_typing] of each
+     component. *)
+  | c_tid n (Γ : Ctx n) A A' a a' b b' :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    typing Γ b A ->
+    conv Γ A A' tuniv ->
+    conv Γ a a' A ->
+    conv Γ b b' A ->
+    conv Γ (tid A a b) (tid A' a' b') tuniv
+  | c_rfl n (Γ : Ctx n) A a a' :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    conv Γ a a' A ->
+    conv Γ (rfl a) (rfl a') (tid A a a)
+  (* J on the LITERAL diagonal [rfl a0].  Both sides have the *same* type
+     [app (app (app C a0) a0) (rfl a0)], so there are no endpoint- or
+     motive-equality premises and subject reduction for this rule needs no
+     Id-injectivity. *)
+  | c_jcase_beta n (Γ : Ctx n) A a0 C d :
+    typing Γ A tuniv ->
+    typing Γ a0 A ->
+    typing Γ C (motive_ty A) ->
+    typing Γ d (base_ty A C) ->
+    conv Γ (jcase C d (rfl a0)) (app d a0)
+           (app (app (app C a0) a0) (rfl a0))
+  | c_jcase n (Γ : Ctx n) A a b C C' d d' p p' :
+    typing Γ A tuniv ->
+    typing Γ a A ->
+    typing Γ b A ->
+    typing Γ C (motive_ty A) ->
+    typing Γ d (base_ty A C) ->
+    typing Γ p (tid A a b) ->
+    conv Γ C C' (motive_ty A) ->
+    conv Γ d d' (base_ty A C) ->
+    conv Γ p p' (tid A a b) ->
+    conv Γ (jcase C d p) (jcase C' d' p') (app (app (app C a) b) p)
   | c_tpi n (Γ : Ctx n) A0 A1 B0 B1 :
     typing Γ A0 tuniv ->
     typing Γ A1 tuniv ->
@@ -168,6 +353,98 @@ with conv :forall {n} (Γ : Ctx n), Tm n -> Tm n -> Tm n -> Prop :=
     conv Γ A0 A1 tuniv ->
     conv (ctx_extend Γ A0) B0 B1 tuniv ->
     conv Γ (tpi A0 B0) (tpi A1 B1) tuniv
+  (* Sigma: the congruence, the two betas, surjective pairing, and the four
+     term congruences (Agda [conv-Sigma], [conv-beta-fst] /
+     [conv-beta-snd], [conv-pair-eta], [conv-MkPair-fst] / [conv-MkPair-snd],
+     [conv-Fst] / [conv-Snd]).  [c_tsig] carries [c_tpi]'s premises so that
+     both [ctx_extend]s are well-formed.
+
+     Note [c_psnd]: the two sides sit at types differing by [pfst M] vs
+     [pfst M'], and the rule states the type at [pfst M] -- so subject
+     reduction for it needs a type transport along [c_pfst], on the model of
+     [c_jcase]'s motive handling. *)
+  | c_tsig n (Γ : Ctx n) A0 A1 B0 B1 :
+    typing Γ A0 tuniv ->
+    typing Γ A1 tuniv ->
+    typing (ctx_extend Γ A0) B0 tuniv ->
+    typing (ctx_extend Γ A1) B1 tuniv ->
+    conv Γ A0 A1 tuniv ->
+    conv (ctx_extend Γ A0) B0 B1 tuniv ->
+    conv Γ (tsig A0 B0) (tsig A1 B1) tuniv
+  | c_beta_fst n (Γ : Ctx n) A B M N :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M A ->
+    typing Γ N B[M..] ->
+    conv Γ (pfst (mkpair M N)) M A
+  | c_beta_snd n (Γ : Ctx n) A B M N :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M A ->
+    typing Γ N B[M..] ->
+    conv Γ (psnd (mkpair M N)) N B[M..]
+  | c_pair_eta n (Γ : Ctx n) A B M :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M (tsig A B) ->
+    conv Γ (mkpair (pfst M) (psnd M)) M (tsig A B)
+  | c_mkpair1 n (Γ : Ctx n) A B M M' N :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    conv Γ M M' A ->
+    typing Γ N B[M..] ->
+    conv Γ (mkpair M N) (mkpair M' N) (tsig A B)
+  | c_mkpair2 n (Γ : Ctx n) A B M N N' :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    typing Γ M A ->
+    conv Γ N N' B[M..] ->
+    conv Γ (mkpair M N) (mkpair M N') (tsig A B)
+  | c_pfst n (Γ : Ctx n) A B M M' :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    conv Γ M M' (tsig A B) ->
+    conv Γ (pfst M) (pfst M') A
+  | c_psnd n (Γ : Ctx n) A B M M' :
+    typing Γ A tuniv ->
+    typing (ctx_extend Γ A) B tuniv ->
+    conv Γ M M' (tsig A B) ->
+    conv Γ (psnd M) (psnd M') B[(pfst M)..]
+
+  (* Prop fragment (Agda [conv-Prop]/[conv-Prop-U]/[conv-Pi-Prop]).
+
+     [c_prop] is PROOF IRRELEVANCE: any two inhabitants of a [Prop] are
+     convertible.  Semantically it is free -- a type in [Prop] has only [bot]
+     as a member ([wt_prop_bot]), and the logical relation is already total at
+     a [bot] element code. *)
+  | c_prop n (Γ : Ctx n) M N A :
+    typing Γ A tprop ->
+    typing Γ M A ->
+    typing Γ N A ->
+    conv Γ M N A
+
+  (* Prop-to-U subtyping, on conversions *)
+  | c_prop_u n (Γ : Ctx n) M N :
+    conv Γ M N tprop ->
+    conv Γ M N tuniv
+
+  (* Π congruence at [Prop] (codomain in [Prop]) *)
+  | c_tpi_prop n (Γ : Ctx n) A0 A1 B0 B1 :
+    typing Γ A0 tuniv ->
+    typing Γ A1 tuniv ->
+    typing (ctx_extend Γ A0) B0 tprop ->
+    typing (ctx_extend Γ A1) B1 tprop ->
+    conv Γ A0 A1 tuniv ->
+    conv (ctx_extend Γ A0) B0 B1 tprop ->
+    conv Γ (tpi A0 B0) (tpi A1 B1) tprop
+
+  (* Eta for unit: any two members of [Unit] are convertible.  This is
+     [c_prop] specialised to [A := tunit] -- semantically both sides' only
+     approximation is [bot] ([wt_unit_bot]), where [EqVal] is total. *)
+  | c_unit_eta n (Γ : Ctx n) M N :
+    typing Γ M tunit ->
+    typing Γ N tunit ->
+    conv Γ M N tunit
 with ctx : forall {n}, Ctx n -> Prop :=
   | c_empty : ctx ctx_empty
   | c_cons n (Γ : Ctx n) A : ctx Γ -> 
@@ -207,24 +484,41 @@ Definition c_beta' {n} (Γ : Ctx n) A B M N C D :
     N[M..] = C -> B[M..] = D -> conv Γ (app (abs A N) M) C D.
 Proof. intros; subst; eauto using c_beta. Qed.
 
-(*
-Definition c_nrec_Z' {n} (Γ : Ctx n) M0 M1 (T : Tm (S n)) C :
-    typing (Γ ++ tnat) T tuniv ->
+Definition t_case' {n} (Γ : Ctx n) (T : Tm (S n)) M M0 M1 C :
+    typing (ctx_extend Γ tnat) T tuniv ->
+    typing Γ M tnat ->
     typing Γ M0 (T[zero..]) ->
-    typing Γ M1 (tpi tnat (tpi T T[rho]⟨↑⟩)) ->
-    T[zero..] = C ->
-    conv Γ (app (nrec T M0 M1) zero) M0 C.
-Proof. intros; subst; eauto using c_nrec_Z. Qed.
+    typing (ctx_extend Γ tnat) M1 T[rho] ->
+    T[M..] = C ->
+    typing Γ (ncase M M0 M1) C.
+Proof. intros; subst; eauto using t_case. Qed.
 
-Definition c_nrec_S' {n} (Γ : Ctx n) T M0 M1 e C :
-    typing (Γ ++ tnat) T tuniv ->
+Definition c_ncase_Z' {n} (Γ : Ctx n) (T : Tm (S n)) M0 M1 C :
+    typing (ctx_extend Γ tnat) T tuniv ->
     typing Γ M0 (T[zero..]) ->
-    typing Γ M1 (tpi tnat (tpi T T[rho]⟨↑⟩)) ->
-    T[(succ e)..] = C ->
-    conv Γ (app (nrec T M0 M1) (succ e))
-      (app (app M1 e) (app (nrec T M0 M1) e)) C.
-Proof. intros; subst; eauto using c_nrec_S. Qed.
-*)
+    typing (ctx_extend Γ tnat) M1 T[rho] ->
+    T[zero..] = C ->
+    conv Γ (ncase zero M0 M1) M0 C.
+Proof. intros; subst; eauto using c_ncase_Z. Qed.
+
+Definition c_ncase_S'' {n} (Γ : Ctx n) (T : Tm (S n)) M0 M1 N C D :
+    typing (ctx_extend Γ tnat) T tuniv ->
+    typing Γ N tnat ->
+    typing Γ M0 (T[zero..]) ->
+    typing (ctx_extend Γ tnat) M1 T[rho] ->
+    M1[N..] = C -> T[(succ N)..] = D ->
+    conv Γ (ncase (succ N) M0 M1) C D.
+Proof. intros; subst; eauto using c_ncase_S. Qed.
+
+Definition c_ncase' {n} (Γ : Ctx n) (T : Tm (S n)) M M0 M1 M' M0' M1' C :
+    typing (ctx_extend Γ tnat) T tuniv ->
+    typing (ctx_extend Γ tnat) M1' T[rho] ->
+    conv Γ M M' tnat ->
+    conv Γ M0 M0' (T[zero..]) ->
+    conv (ctx_extend Γ tnat) M1 M1' T[rho] ->
+    T[M..] = C ->
+    conv Γ (ncase M M0 M1) (ncase M' M0' M1') C.
+Proof. intros; subst; eauto using c_ncase. Qed.
 
 #[export] Hint Resolve t_var' t_univ' : syntax.
 
@@ -240,6 +534,33 @@ Import Notations.
 Open Scope syntax_scope.
 
 (** typing/conv implies the context is well-formed *)
+
+(* Sigma rules with an unconstrained conclusion type -- the [t_app'] idiom.
+   Needed wherever a renaming or substitution has already normalised the
+   single substitution in the conclusion into a different but equal shape. *)
+Definition t_mkpair' {n} (Γ : Ctx n) A (B : Tm (S n)) M N C :
+  typing Γ A tuniv -> typing (ctx_extend Γ A) B tuniv ->
+  typing Γ M A -> typing Γ N C -> B[M..] = C ->
+  typing Γ (mkpair M N) (tsig A B).
+Proof. intros. subst. eapply t_mkpair; eauto. Qed.
+
+Definition t_psnd' {n} (Γ : Ctx n) A (B : Tm (S n)) M C :
+  typing Γ A tuniv -> typing (ctx_extend Γ A) B tuniv ->
+  typing Γ M (tsig A B) -> B[(pfst M)..] = C ->
+  typing Γ (psnd M) C.
+Proof. intros. subst. eapply t_psnd; eauto. Qed.
+
+Definition c_beta_snd' {n} (Γ : Ctx n) A (B : Tm (S n)) M N C :
+  typing Γ A tuniv -> typing (ctx_extend Γ A) B tuniv ->
+  typing Γ M A -> typing Γ N C -> B[M..] = C ->
+  conv Γ (psnd (mkpair M N)) N C.
+Proof. intros. subst. eapply c_beta_snd; eauto. Qed.
+
+Definition c_psnd' {n} (Γ : Ctx n) A (B : Tm (S n)) M M' C :
+  typing Γ A tuniv -> typing (ctx_extend Γ A) B tuniv ->
+  conv Γ M M' (tsig A B) -> B[(pfst M)..] = C ->
+  conv Γ (psnd M) (psnd M') C.
+Proof. intros. subst. eapply c_psnd; eauto. Qed.
 
 Lemma typing_ctx {n} (Γ : Ctx n) M A :
   Γ ⊢e M ∈ A -> ctx Γ.
@@ -266,6 +587,28 @@ Proof. asimpl. done. Qed.
 Lemma ren_up_shift {n m} (δ : fin n -> fin m) (N : Tm n) :
   (N⟨↑⟩)⟨up_ren δ⟩ = (N⟨δ⟩)⟨↑⟩.
 Proof. asimpl. done. Qed.
+
+(* Weakening commutes with a lifted substitution -- the substitution analogue
+   of [ren_up_shift].  Needed for the codomain [A⟨↑⟩] of a fixpoint's step
+   function. *)
+Lemma subst_up_shift {n m} (σ : fin n -> Tm m) (N : Tm n) :
+  (N⟨↑⟩)[⇑ σ] = (N[σ])⟨↑⟩.
+Proof. asimpl. done. Qed.
+
+(* Substituting into a weakened term does nothing: the fixpoint's result type
+   [A⟨↑⟩[(fix_ g)..]] is just [A]. *)
+Lemma subst1_shift {n} (A N : Tm n) : A⟨↑⟩[N..] = A.
+Proof. asimpl. done. Qed.
+
+(* [rho] -- the [succ (var 0)] shift that types the dependent case's successor
+   branch -- commutes with a lifted substitution and with a lifted renaming. *)
+Lemma rho_subst_up {n m} (T : Tm (S n)) (σ : fin n -> Tm m) :
+  (T[⇑ σ])[rho] = (T[rho])[⇑ σ].
+Proof. unfold rho. asimpl. setoid_rewrite rinstInst'_Tm_pointwise. reflexivity. Qed.
+
+Lemma rho_ren_up {n m} (T : Tm (S n)) (δ : fin n -> fin m) :
+  (T⟨up_ren δ⟩)[rho] = ⟨up_ren δ⟩ (T[rho]).
+Proof. unfold rho. asimpl. reflexivity. Qed.
 
 
 (** * Renaming and substitution properties *)
@@ -326,6 +669,88 @@ Proof.
       eapply renaming_typing with (A:=tuniv); eauto with renaming.
       eapply renaming_typing with (A:=tuniv); eauto with renaming.
       eapply renaming_typing in h3; eauto.
+    + (* t_case: renaming a dependent case *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact wtΔ | apply t_nat; exact wtΔ ]).
+      have TRl : typing_renaming (Δ ++ tnat) (up_ren δ) (Γ ++ tnat)
+        := @typing_renaming_lift m Δ n Γ δ tnat tR.
+      have TT : typing (Δ ++ tnat) (T⟨up_ren δ⟩) tuniv.
+      { move: (renaming_typing _ _ T tuniv _ _ (up_ren δ) h1 TRl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM : typing Δ (M⟨δ⟩) tnat.
+      { move: (renaming_typing _ _ M tnat _ _ δ h2 tR wtΔ) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0⟨δ⟩) ((T⟨up_ren δ⟩)[zero..]).
+      { move: (renaming_typing _ _ M0 (T[zero..]) _ _ δ h3 tR wtΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1⟨up_ren δ⟩) ((T⟨up_ren δ⟩)[rho]).
+      { move: (renaming_typing _ _ M1 (T[rho]) _ _ (up_ren δ) h4 TRl Ctn) => hh.
+        rewrite rho_ren_up. exact hh. }
+      eapply t_case';
+        [ exact TT | exact TM | exact TM0 | exact TM1 | first [ asimpl; reflexivity | symmetry; apply subst1_ren_comm ] ].
+    + (* t_fix *)
+      eapply t_fix.
+      * exact (renaming_typing _ _ A tuniv _ _ δ h1 tR wtΔ).
+      * rewrite -ren_up_shift.
+        move: (renaming_typing _ _ g (tpi A A⟨↑⟩) _ _ δ h2 tR wtΔ) => hh.
+        cbn in hh. exact hh.
+    + (* t_jcase: the derived motive/base types commute with renaming.
+         ([t_tid] and [t_rfl] are discharged by the [econstructor; eauto]
+         prelude above -- their types rename structurally.) *)
+      (* Each premise is a direct appeal to the mutual IH, with the term and
+         type given explicitly: the conclusion does not mention [A], and the
+         renamed types are already pushed through the renaming, so
+         higher-order unification against [⟨?δ⟩ ?A] would not fire. *)
+      eapply t_jcase.
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ a A _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ b A _ _ δ); eauto.
+      1: (rewrite -ren_motive_ty;
+          eapply (renaming_typing _ _ C (motive_ty A) _ _ δ); eauto).
+      1: (rewrite -ren_base_ty;
+          eapply (renaming_typing _ _ d (base_ty A C) _ _ δ); eauto).
+      1: eapply (renaming_typing _ _ p (tid A a b) _ _ δ); eauto.
+    + (* t_mkpair.  ([t_tsig] is discharged by the [econstructor; eauto]
+         prelude -- its premises rename structurally.)  Here the second
+         component's type is [B[M..]], which has to be pushed through the
+         renaming by [subst1_ren_comm]. *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@t_mkpair _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (N⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M A _ _ δ); eauto.
+      1: (rewrite -(@subst1_ren_comm _ _ B M δ);
+          eapply (renaming_typing _ _ N (B[M..]) _ _ δ); eauto).
+    + (* t_pfst: the codomain [B] does not occur in the conclusion, so it has
+         to be supplied rather than unified *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@t_pfst _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M (tsig A B) _ _ δ); eauto.
+    + (* t_psnd: the result type is [B] instantiated at the first projection,
+         so the renaming is pushed through that single substitution first --
+         after which the match is first-order *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      rewrite (@subst1_ren_comm _ _ B (pfst M) δ). cbn.
+      eapply (@t_psnd _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M (tsig A B) _ _ δ); eauto.
+    + (* t_prop_u: Prop-to-U subtyping commutes with renaming *)
+      eapply t_prop_u.
+      eapply renaming_typing with (A := tprop);
+        [ eassumption | eassumption | eassumption ].
+    + (* t_tpi_prop: the [t_tpi] case with the codomain at [tprop] *)
+      have EC0: ctx (Δ ++ A⟨δ⟩) by
+       eapply c_cons; eauto;
+       eapply renaming_typing with (A:= tuniv); eauto.
+      eapply t_tpi_prop.
+      1: eapply renaming_typing with (A:= tuniv); eauto.
+      1: eapply renaming_typing with (A:= tprop); eauto with renaming.
   - intros tR wtΔ.
     dependent destruction h; subst.
     all: try have EC: ctx (Δ ++ A ⟨δ⟩) by
@@ -362,8 +787,112 @@ Proof.
       eapply renaming_conv with (Δ := Δ ++ A⟨δ⟩)(δ:=up_ren δ) in h;
         eauto with renaming.
       asimpl in h. done.
+    + (* c_ncase_Z *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact wtΔ | apply t_nat; exact wtΔ ]).
+      have TRl : typing_renaming (Δ ++ tnat) (up_ren δ) (Γ ++ tnat)
+        := @typing_renaming_lift m Δ n Γ δ tnat tR.
+      have TT : typing (Δ ++ tnat) (T⟨up_ren δ⟩) tuniv.
+      { move: (renaming_typing _ _ T tuniv _ _ (up_ren δ) H TRl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0⟨δ⟩) ((T⟨up_ren δ⟩)[zero..]).
+      { move: (renaming_typing _ _ M0 (T[zero..]) _ _ δ H0 tR wtΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1⟨up_ren δ⟩) ((T⟨up_ren δ⟩)[rho]).
+      { move: (renaming_typing _ _ M1 (T[rho]) _ _ (up_ren δ) H1 TRl Ctn) => hh.
+        rewrite rho_ren_up. exact hh. }
+      eapply c_ncase_Z';
+        [ exact TT | exact TM0 | exact TM1 | first [ asimpl; reflexivity | symmetry; apply subst1_ren_comm ] ].
+    + (* c_ncase_S *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact wtΔ | apply t_nat; exact wtΔ ]).
+      have TRl : typing_renaming (Δ ++ tnat) (up_ren δ) (Γ ++ tnat)
+        := @typing_renaming_lift m Δ n Γ δ tnat tR.
+      have TT : typing (Δ ++ tnat) (T⟨up_ren δ⟩) tuniv.
+      { move: (renaming_typing _ _ T tuniv _ _ (up_ren δ) H TRl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TN : typing Δ (N⟨δ⟩) tnat.
+      { move: (renaming_typing _ _ N tnat _ _ δ H0 tR wtΔ) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0⟨δ⟩) ((T⟨up_ren δ⟩)[zero..]).
+      { move: (renaming_typing _ _ M0 (T[zero..]) _ _ δ H1 tR wtΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1⟨up_ren δ⟩) ((T⟨up_ren δ⟩)[rho]).
+      { move: (renaming_typing _ _ M1 (T[rho]) _ _ (up_ren δ) H2 TRl Ctn) => hh.
+        rewrite rho_ren_up. exact hh. }
+      eapply c_ncase_S'';
+        [ exact TT | exact TN | exact TM0 | exact TM1
+        | first [ asimpl; reflexivity | symmetry; apply subst1_ren_comm ] | first [ asimpl; reflexivity | symmetry; apply subst1_ren_comm ] ].
+    + (* c_ncase *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact wtΔ | apply t_nat; exact wtΔ ]).
+      have TRl : typing_renaming (Δ ++ tnat) (up_ren δ) (Γ ++ tnat)
+        := @typing_renaming_lift m Δ n Γ δ tnat tR.
+      have TT : typing (Δ ++ tnat) (T⟨up_ren δ⟩) tuniv.
+      { move: (renaming_typing _ _ T tuniv _ _ (up_ren δ) H TRl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM1' : typing (Δ ++ tnat) (M1'⟨up_ren δ⟩) ((T⟨up_ren δ⟩)[rho]).
+      { move: (renaming_typing _ _ M1' (T[rho]) _ _ (up_ren δ) H0 TRl Ctn) => hh.
+        rewrite rho_ren_up. exact hh. }
+      have CM : conv Δ (M⟨δ⟩) (M'⟨δ⟩) tnat.
+      { move: (renaming_conv _ _ M M' tnat _ _ δ h1 tR wtΔ) => hh.
+        asimpl in hh. exact hh. }
+      have CM0 : conv Δ (M0⟨δ⟩) (M0'⟨δ⟩) ((T⟨up_ren δ⟩)[zero..]).
+      { move: (renaming_conv _ _ M0 M0' (T[zero..]) _ _ δ h2 tR wtΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have CM1 : conv (Δ ++ tnat) (M1⟨up_ren δ⟩) (M1'⟨up_ren δ⟩) ((T⟨up_ren δ⟩)[rho]).
+      { move: (renaming_conv _ _ M1 M1' (T[rho]) _ _ (up_ren δ) h3 TRl Ctn) => hh.
+        rewrite rho_ren_up. exact hh. }
+      eapply c_ncase';
+        [ exact TT | exact TM1' | exact CM | exact CM0 | exact CM1
+        | first [ asimpl; reflexivity | symmetry; apply subst1_ren_comm ] ].
     + eapply c_succ.
       eapply renaming_conv with (A:=tnat); eauto.
+    + (* c_fix *)
+      eapply c_fix.
+      * exact (renaming_typing _ _ A tuniv _ _ δ H tR wtΔ).
+      * rewrite -ren_up_shift.
+        move: (renaming_typing _ _ g (tpi A A⟨↑⟩) _ _ δ H0 tR wtΔ) => hh.
+        cbn in hh. exact hh.
+    + (* c_fix_cong *)
+      eapply c_fix_cong.
+      * exact (renaming_typing _ _ A tuniv _ _ δ H tR wtΔ).
+      * rewrite -ren_up_shift.
+        move: (renaming_typing _ _ g (tpi A A⟨↑⟩) _ _ δ H0 tR wtΔ) => hh.
+        cbn in hh. exact hh.
+      * rewrite -ren_up_shift.
+        move: (renaming_typing _ _ g' (tpi A A⟨↑⟩) _ _ δ H1 tR wtΔ) => hh.
+        cbn in hh. exact hh.
+      * rewrite -ren_up_shift.
+        move: (renaming_conv _ _ g g' (tpi A A⟨↑⟩) _ _ δ h tR wtΔ) => hh.
+        cbn in hh. exact hh.
+    + (* c_jcase_beta.  ([c_tid] and [c_rfl] are discharged by the
+         [econstructor; eauto] prelude.)  The only obstacle is that the derived
+         motive/base types must be pushed under the renaming first, which is
+         [ren_motive_ty]/[ren_base_ty]; after that every premise is a direct
+         appeal to the mutual IH. *)
+      eapply c_jcase_beta.
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ a0 A _ _ δ); eauto.
+      1: (rewrite -ren_motive_ty;
+          eapply (renaming_typing _ _ C (motive_ty A) _ _ δ); eauto).
+      1: (rewrite -ren_base_ty;
+          eapply (renaming_typing _ _ d (base_ty A C) _ _ δ); eauto).
+    + (* c_jcase, likewise *)
+      eapply c_jcase.
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ a A _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ b A _ _ δ); eauto.
+      1: (rewrite -ren_motive_ty;
+          eapply (renaming_typing _ _ C (motive_ty A) _ _ δ); eauto).
+      1: (rewrite -ren_base_ty;
+          eapply (renaming_typing _ _ d (base_ty A C) _ _ δ); eauto).
+      1: eapply (renaming_typing _ _ p (tid A a b) _ _ δ); eauto.
+      1: (rewrite -ren_motive_ty;
+          eapply (renaming_conv _ _ C C' (motive_ty A) _ _ δ); eauto).
+      1: (rewrite -ren_base_ty;
+          eapply (renaming_conv _ _ d d' (base_ty A C) _ _ δ); eauto).
+      1: eapply (renaming_conv _ _ p p' (tid A a b) _ _ δ); eauto.
     + (* tpi *)
       have EC0: ctx (Δ ++ A0⟨δ⟩) by
        eapply c_cons; eauto;
@@ -378,6 +907,120 @@ Proof.
       eapply renaming_typing with (A:= tuniv); eauto with renaming.
       eapply renaming_conv with (A:= tuniv); eauto.
       eapply renaming_conv with (A:= tuniv); eauto with renaming.
+    + (* c_tsig: the [c_tpi] case verbatim *)
+      have EC0: ctx (Δ ++ A0⟨δ⟩) by
+       eapply c_cons; eauto;
+       eapply renaming_typing with (A:= tuniv); eauto.
+      have EC1: ctx (Δ ++ A1⟨δ⟩) by
+       eapply c_cons; eauto;
+       eapply renaming_typing with (A:= tuniv); eauto.
+      eapply c_tsig; eauto.
+      eapply renaming_typing with (A:= tuniv); eauto.
+      eapply renaming_typing with (A:= tuniv); eauto.
+      eapply renaming_typing with (A:= tuniv); eauto with renaming.
+      eapply renaming_typing with (A:= tuniv); eauto with renaming.
+      eapply renaming_conv with (A:= tuniv); eauto.
+      eapply renaming_conv with (A:= tuniv); eauto with renaming.
+    + (* c_beta_fst *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@c_beta_fst _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (N⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M A _ _ δ); eauto.
+      1: (rewrite -(@subst1_ren_comm _ _ B M δ);
+          eapply (renaming_typing _ _ N (B[M..]) _ _ δ); eauto).
+    + (* c_beta_snd: the stated type is [B[M..]], so push the renaming through
+         the single substitution before applying the rule *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      rewrite (@subst1_ren_comm _ _ B M δ).
+      eapply (@c_beta_snd _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (N⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M A _ _ δ); eauto.
+      1: (rewrite -(@subst1_ren_comm _ _ B M δ);
+          eapply (renaming_typing _ _ N (B[M..]) _ _ δ); eauto).
+    + (* c_pair_eta: surjective pairing renames structurally *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@c_pair_eta _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M (tsig A B) _ _ δ); eauto.
+    + (* c_mkpair1 *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@c_mkpair1 _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (M'⟨δ⟩) (N⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_conv _ _ M M' A _ _ δ); eauto.
+      1: (rewrite -(@subst1_ren_comm _ _ B M δ);
+          eapply (renaming_typing _ _ N (B[M..]) _ _ δ); eauto).
+    + (* c_mkpair2 *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@c_mkpair2 _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (N⟨δ⟩) (N'⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_typing _ _ M A _ _ δ); eauto.
+      1: (rewrite -(@subst1_ren_comm _ _ B M δ);
+          eapply (renaming_conv _ _ N N' (B[M..]) _ _ δ); eauto).
+    + (* c_pfst *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      eapply (@c_pfst _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (M'⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_conv _ _ M M' (tsig A B) _ _ δ); eauto.
+    + (* c_psnd: as [t_psnd], the type is [B] at the first projection *)
+      have TRl : typing_renaming (Δ ++ A⟨δ⟩) (up_ren δ) (Γ ++ A)
+        := @typing_renaming_lift m Δ n Γ δ A tR.
+      rewrite (@subst1_ren_comm _ _ B (pfst M) δ). cbn.
+      eapply (@c_psnd _ Δ (A⟨δ⟩) (B⟨up_ren δ⟩) (M⟨δ⟩) (M'⟨δ⟩)).
+      1: eapply (renaming_typing _ _ A tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B tuniv _ _ (up_ren δ)); eauto.
+      1: eapply (renaming_conv _ _ M M' (tsig A B) _ _ δ); eauto.
+    + (* c_prop: proof irrelevance commutes with renaming.  Every recursive
+         call is on a hypothesis (a subterm of [h]); leaving the choice to
+         [eauto] lets it pick a non-subterm and the guard check then fails. *)
+      eapply c_prop.
+      1: eapply renaming_typing with (A := tprop);
+           [ eassumption | eassumption | eassumption ].
+      all: eapply renaming_typing; [ eassumption | eassumption | eassumption ].
+    + (* c_prop_u *)
+      eapply c_prop_u.
+      eapply renaming_conv with (A := tprop);
+        [ eassumption | eassumption | eassumption ].
+    + (* c_tpi_prop: the [c_tpi] case with the codomains at [tprop] *)
+      have EC0: ctx (Δ ++ A0⟨δ⟩) by
+       eapply c_cons; eauto;
+       eapply renaming_typing with (A:= tuniv); eauto.
+      have EC1: ctx (Δ ++ A1⟨δ⟩) by
+       eapply c_cons; eauto;
+       eapply renaming_typing with (A:= tuniv); eauto.
+      eapply (@c_tpi_prop _ Δ (A0⟨δ⟩) (A1⟨δ⟩) (B0⟨up_ren δ⟩) (B1⟨up_ren δ⟩)).
+      1: eapply (renaming_typing _ _ A0 tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ A1 tuniv _ _ δ); eauto.
+      1: eapply (renaming_typing _ _ B0 tprop _ _ (up_ren δ)); eauto with renaming.
+      1: eapply (renaming_typing _ _ B1 tprop _ _ (up_ren δ)); eauto with renaming.
+      1: eapply (renaming_conv _ _ A0 A1 tuniv _ _ δ); eauto.
+      1: eapply (renaming_conv _ _ B0 B1 tprop _ _ (up_ren δ)); eauto with renaming.
+    + (* c_unit_eta: as [c_prop], with the type fixed to [tunit] *)
+      eapply c_unit_eta.
+      all: eapply renaming_typing with (A := tunit);
+             [ eassumption | eassumption | eassumption ].
+Qed.
+
+(* Weakening a type into an extended context. *)
+Lemma typing_weaken_shift {n} (Γ : Ctx n) (A B : Tm n) :
+  typing Γ A tuniv -> typing Γ B tuniv -> typing (Γ ++ B) A⟨↑⟩ tuniv.
+Proof.
+  move=> hA hB.
+  have C : ctx (Γ ++ B) by (eapply c_cons; [ eapply typing_ctx; exact hA | exact hB ]).
+  move: (renaming_typing Γ A tuniv (Γ ++ B) shift hA
+           (typing_renaming_shift Γ B) C) => hh.
+  asimpl in hh. exact hh.
 Qed.
 
 (** * All types in well-formed contexts are well-formed *)
@@ -447,6 +1090,21 @@ Proof.
   all: intros h tS tΔ.
   - dependent destruction h; subst.
     all: cbn; asimpl.
+    (* Dispatch the two Prop SORT rules here, before the [econstructor]
+       catch-all below can pick [t_prop_u] -- whose conclusion matches every
+       [_ ∈ tuniv] goal -- and then discharge its premise with an unguarded
+       recursive call, which breaks the fixpoint's guard check.  Both patterns
+       only fire when they are correct: [t_prop_u]'s needs a hypothesis typing
+       the goal's own subject at [tprop]. *)
+    all: try (match goal with
+              | [ |- _ ⊢e tprop ∈ tuniv ] => eapply t_prop; eassumption
+              end).
+    all: try (match goal with
+              | [ hh : _ ⊢e ?X ∈ tprop |- _ ⊢e _ ∈ tuniv ] =>
+                  eapply t_prop_u;
+                  eapply substitution_tm with (A := tprop);
+                    [ exact hh | eassumption | eassumption ]
+              end).
     all: try (have EC: ctx (Δ ++ A[σ]) by
           eapply c_cons; eauto;
           eapply substitution_tm with (A:= tuniv); eauto).
@@ -462,6 +1120,77 @@ Proof.
       eapply substitution_tm with (A:= tuniv); eauto with renaming.
       eapply substitution_tm with (A:= tpi A B); eauto with renaming.
       asimpl. reflexivity.
+    + (* t_case: substituting a dependent case.  [asimpl] has already put the
+         goal's motive in the [T[M[σ] .: σ]] form; [subst_cons_eq] turns it into
+         the [T[⇑σ][M[σ]..]] shape that [t_case] concludes with. *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact tΔ | apply t_nat; exact tΔ ]).
+      have TSl : typing_subst (Δ ++ tnat) (⇑ σ) (Γ ++ tnat)
+        := @typing_subst_lift m Δ n σ Γ tnat Ctn tS.
+      have TT : typing (Δ ++ tnat) (T[⇑ σ]) tuniv.
+      { move: (substitution_tm _ _ T tuniv _ _ (⇑ σ) h1 TSl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM : typing Δ (M[σ]) tnat.
+      { move: (substitution_tm _ _ M tnat _ _ σ h2 tS tΔ) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0[σ]) ((T[⇑ σ])[zero..]).
+      { move: (substitution_tm _ _ M0 (T[zero..]) _ _ σ h3 tS tΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1[⇑ σ]) ((T[⇑ σ])[rho]).
+      { move: (substitution_tm _ _ M1 (T[rho]) _ _ (⇑ σ) h4 TSl Ctn) => hh.
+        rewrite rho_subst_up. exact hh. }
+      eapply t_case';
+        [ exact TT | exact TM | exact TM0 | exact TM1 | asimpl; reflexivity ].
+    + (* t_fix *)
+      eapply t_fix.
+      * move: (substitution_tm _ _ A tuniv _ _ σ h1 tS tΔ) => hh.
+        asimpl in hh. exact hh.
+      * rewrite -subst_up_shift.
+        move: (substitution_tm _ _ g (tpi A A⟨↑⟩) _ _ σ h2 tS tΔ) => hh.
+        cbn in hh. exact hh.
+    + (* t_jcase: as in [renaming_typing], with [subst_motive_ty]/[subst_base_ty]
+         (and [t_tid]/[t_rfl] discharged by the prelude) *)
+      eapply t_jcase.
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ a A _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ b A _ _ σ); eauto.
+      1: (rewrite -subst_motive_ty;
+          eapply (substitution_tm _ _ C (motive_ty A) _ _ σ); eauto).
+      1: (rewrite -subst_base_ty;
+          eapply (substitution_tm _ _ d (base_ty A C) _ _ σ); eauto).
+      1: eapply (substitution_tm _ _ p (tid A a b) _ _ σ); eauto.
+    + (* t_mkpair.  [asimpl] has already normalised the second component's
+         type into the [B[M[σ] .: σ]] shape, so the rule is applied through
+         [t_mkpair'] with that type given. *)
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@t_mkpair' _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (N[σ]) ((B[M..])[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M A _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ N (B[M..]) _ _ σ); eauto.
+      1: symmetry; apply subst1_subst_comm.
+    + (* t_pfst: the codomain has to be supplied *)
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@t_pfst _ Δ (A[σ]) (B[⇑ σ]) (M[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M (tsig A B) _ _ σ); eauto.
+    + (* t_psnd *)
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@t_psnd' _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (B[pfst M[σ] .: σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M (tsig A B) _ _ σ); eauto.
+      1: asimpl; reflexivity.
+    + (* t_tpi_prop: the [t_tpi] case with the codomain at [tprop] *)
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@t_tpi_prop _ Δ (A[σ]) (B[⇑ σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tprop _ _ (⇑ σ)); eauto.
   - dependent destruction h; subst.
     all: try (have EC: ctx (Δ ++ A[σ]) by
        eapply c_cons; eauto;
@@ -498,7 +1227,68 @@ Proof.
       eapply substitution_conv with (Δ := Δ ++ A[σ])(σ:=⇑σ) in h;
         eauto with renaming.
       asimpl in h. done.
-      
+    + (* c_ncase_Z *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact tΔ | apply t_nat; exact tΔ ]).
+      have TSl : typing_subst (Δ ++ tnat) (⇑ σ) (Γ ++ tnat)
+        := @typing_subst_lift m Δ n σ Γ tnat Ctn tS.
+      have TT : typing (Δ ++ tnat) (T[⇑ σ]) tuniv.
+      { move: (substitution_tm _ _ T tuniv _ _ (⇑ σ) H TSl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0[σ]) ((T[⇑ σ])[zero..]).
+      { move: (substitution_tm _ _ M0 (T[zero..]) _ _ σ H0 tS tΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1[⇑ σ]) ((T[⇑ σ])[rho]).
+      { move: (substitution_tm _ _ M1 (T[rho]) _ _ (⇑ σ) H1 TSl Ctn) => hh.
+        rewrite rho_subst_up. exact hh. }
+      cbn.
+      eapply c_ncase_Z';
+        [ exact TT | exact TM0 | exact TM1 | asimpl; reflexivity ].
+    + (* c_ncase_S *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact tΔ | apply t_nat; exact tΔ ]).
+      have TSl : typing_subst (Δ ++ tnat) (⇑ σ) (Γ ++ tnat)
+        := @typing_subst_lift m Δ n σ Γ tnat Ctn tS.
+      have TT : typing (Δ ++ tnat) (T[⇑ σ]) tuniv.
+      { move: (substitution_tm _ _ T tuniv _ _ (⇑ σ) H TSl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TN : typing Δ (N[σ]) tnat.
+      { move: (substitution_tm _ _ N tnat _ _ σ H0 tS tΔ) => hh.
+        asimpl in hh. exact hh. }
+      have TM0 : typing Δ (M0[σ]) ((T[⇑ σ])[zero..]).
+      { move: (substitution_tm _ _ M0 (T[zero..]) _ _ σ H1 tS tΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have TM1 : typing (Δ ++ tnat) (M1[⇑ σ]) ((T[⇑ σ])[rho]).
+      { move: (substitution_tm _ _ M1 (T[rho]) _ _ (⇑ σ) H2 TSl Ctn) => hh.
+        rewrite rho_subst_up. exact hh. }
+      cbn.
+      eapply c_ncase_S'';
+        [ exact TT | exact TN | exact TM0 | exact TM1
+        | asimpl; reflexivity | asimpl; reflexivity ].
+    + (* c_ncase *)
+      have Ctn : ctx (Δ ++ tnat)
+        by (eapply c_cons; [ exact tΔ | apply t_nat; exact tΔ ]).
+      have TSl : typing_subst (Δ ++ tnat) (⇑ σ) (Γ ++ tnat)
+        := @typing_subst_lift m Δ n σ Γ tnat Ctn tS.
+      have TT : typing (Δ ++ tnat) (T[⇑ σ]) tuniv.
+      { move: (substitution_tm _ _ T tuniv _ _ (⇑ σ) H TSl Ctn) => hh.
+        asimpl in hh. exact hh. }
+      have TM1' : typing (Δ ++ tnat) (M1'[⇑ σ]) ((T[⇑ σ])[rho]).
+      { move: (substitution_tm _ _ M1' (T[rho]) _ _ (⇑ σ) H0 TSl Ctn) => hh.
+        rewrite rho_subst_up. exact hh. }
+      have CM : conv Δ (M[σ]) (M'[σ]) tnat.
+      { move: (substitution_conv _ _ M M' tnat _ _ σ h1 tS tΔ) => hh.
+        asimpl in hh. exact hh. }
+      have CM0 : conv Δ (M0[σ]) (M0'[σ]) ((T[⇑ σ])[zero..]).
+      { move: (substitution_conv _ _ M0 M0' (T[zero..]) _ _ σ h2 tS tΔ) => hh.
+        asimpl in hh. asimpl. exact hh. }
+      have CM1 : conv (Δ ++ tnat) (M1[⇑ σ]) (M1'[⇑ σ]) ((T[⇑ σ])[rho]).
+      { move: (substitution_conv _ _ M1 M1' (T[rho]) _ _ (⇑ σ) h3 TSl Ctn) => hh.
+        rewrite rho_subst_up. exact hh. }
+      cbn.
+      eapply c_ncase';
+        [ exact TT | exact TM1' | exact CM | exact CM0 | exact CM1
+        | asimpl; reflexivity ].
     + cbn.
       eapply c_succ.
       eapply substitution_conv with (A:=tnat); eauto.
@@ -512,6 +1302,63 @@ Proof.
       eapply substitution_tm; eauto with renaming.
       eapply substitution_conv with (A:=tuniv); eauto.
       eapply substitution_conv; eauto with renaming.
+
+    + (* c_fix *)
+      cbn. eapply c_fix.
+      * move: (substitution_tm _ _ A tuniv _ _ σ H tS tΔ) => hh.
+        asimpl in hh. exact hh.
+      * rewrite -subst_up_shift.
+        move: (substitution_tm _ _ g (tpi A A⟨↑⟩) _ _ σ H0 tS tΔ) => hh.
+        cbn in hh. exact hh.
+    + (* c_fix_cong *)
+      cbn. eapply c_fix_cong.
+      * move: (substitution_tm _ _ A tuniv _ _ σ H tS tΔ) => hh.
+        asimpl in hh. exact hh.
+      * rewrite -subst_up_shift.
+        move: (substitution_tm _ _ g (tpi A A⟨↑⟩) _ _ σ H0 tS tΔ) => hh.
+        cbn in hh. exact hh.
+      * rewrite -subst_up_shift.
+        move: (substitution_tm _ _ g' (tpi A A⟨↑⟩) _ _ σ H1 tS tΔ) => hh.
+        cbn in hh. exact hh.
+      * rewrite -subst_up_shift.
+        move: (substitution_conv _ _ g g' (tpi A A⟨↑⟩) _ _ σ h tS tΔ) => hh.
+        cbn in hh. exact hh.
+    + (* c_tid *)
+      cbn. eapply c_tid.
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ a A _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ b A _ _ σ); eauto.
+      1: eapply (substitution_conv _ _ A A' tuniv _ _ σ); eauto.
+      1: eapply (substitution_conv _ _ a a' A _ _ σ); eauto.
+      1: eapply (substitution_conv _ _ b b' A _ _ σ); eauto.
+    + (* c_rfl *)
+      cbn. eapply c_rfl.
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ a A _ _ σ); eauto.
+      1: eapply (substitution_conv _ _ a a' A _ _ σ); eauto.
+    + (* c_jcase_beta *)
+      cbn. eapply c_jcase_beta.
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ a0 A _ _ σ); eauto.
+      1: (rewrite -subst_motive_ty;
+          eapply (substitution_tm _ _ C (motive_ty A) _ _ σ); eauto).
+      1: (rewrite -subst_base_ty;
+          eapply (substitution_tm _ _ d (base_ty A C) _ _ σ); eauto).
+    + (* c_jcase *)
+      cbn. eapply c_jcase.
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ a A _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ b A _ _ σ); eauto.
+      1: (rewrite -subst_motive_ty;
+          eapply (substitution_tm _ _ C (motive_ty A) _ _ σ); eauto).
+      1: (rewrite -subst_base_ty;
+          eapply (substitution_tm _ _ d (base_ty A C) _ _ σ); eauto).
+      1: eapply (substitution_tm _ _ p (tid A a b) _ _ σ); eauto.
+      1: (rewrite -subst_motive_ty;
+          eapply (substitution_conv _ _ C C' (motive_ty A) _ _ σ); eauto).
+      1: (rewrite -subst_base_ty;
+          eapply (substitution_conv _ _ d d' (base_ty A C) _ _ σ); eauto).
+      1: eapply (substitution_conv _ _ p p' (tid A a b) _ _ σ); eauto.
 
     + (* tpi *)
       cbn.
@@ -534,6 +1381,117 @@ Proof.
         eauto.
       eapply substitution_conv with (A:= tuniv);
         eauto with renaming.
+    + (* c_tsig: the [c_tpi] case verbatim *)
+      cbn.
+      have EC0: ctx (Δ ++ A0[σ]).
+      { eapply c_cons; eauto;
+        eapply substitution_tm with (A:= tuniv); eauto. }
+      have EC1: ctx (Δ ++ A1[σ]).
+      { eapply c_cons; eauto;
+        eapply substitution_tm with (A:= tuniv); eauto. }
+      eapply c_tsig; eauto.
+      eapply substitution_tm with (A:= tuniv); eauto.
+      eapply substitution_tm with (A:= tuniv); eauto.
+      eapply substitution_tm with (A:= tuniv); eauto with renaming.
+      eapply substitution_tm with (A:= tuniv); eauto with renaming.
+      eapply substitution_conv with (A:= tuniv); eauto.
+      eapply substitution_conv with (A:= tuniv); eauto with renaming.
+    + (* c_beta_fst *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_beta_fst _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (N[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M A _ _ σ); eauto.
+      1: (rewrite -subst1_subst_comm;
+          eapply (substitution_tm _ _ N (B[M..]) _ _ σ); eauto).
+    + (* c_beta_snd: the stated type is [B[M..]], given to [c_beta_snd'] in the
+         shape the substitution leaves it in *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_beta_snd' _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (N[σ]) (B[M..][σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M A _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ N (B[M..]) _ _ σ); eauto.
+      1: first [ asimpl; reflexivity | symmetry; apply subst1_subst_comm ].
+    + (* c_pair_eta *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_pair_eta _ Δ (A[σ]) (B[⇑ σ]) (M[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M (tsig A B) _ _ σ); eauto.
+    + (* c_mkpair1 *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_mkpair1 _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (M'[σ]) (N[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_conv _ _ M M' A _ _ σ); eauto.
+      1: (rewrite -subst1_subst_comm;
+          eapply (substitution_tm _ _ N (B[M..]) _ _ σ); eauto).
+    + (* c_mkpair2 *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_mkpair2 _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (N[σ]) (N'[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_tm _ _ M A _ _ σ); eauto.
+      1: (rewrite -subst1_subst_comm;
+          eapply (substitution_conv _ _ N N' (B[M..]) _ _ σ); eauto).
+    + (* c_pfst *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_pfst _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (M'[σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_conv _ _ M M' (tsig A B) _ _ σ); eauto.
+    + (* c_psnd: the type is [B] at the first projection *)
+      cbn.
+      have TSl : typing_subst (Δ ++ A[σ]) (⇑ σ) (Γ ++ A)
+        := @typing_subst_lift m Δ n σ Γ A EC tS.
+      eapply (@c_psnd' _ Δ (A[σ]) (B[⇑ σ]) (M[σ]) (M'[σ]) (B[(pfst M)..][σ])).
+      1: eapply (substitution_tm _ _ A tuniv _ _ σ); eauto.
+      1: eapply (substitution_tm _ _ B tuniv _ _ (⇑ σ)); eauto.
+      1: eapply (substitution_conv _ _ M M' (tsig A B) _ _ σ); eauto.
+      1: first [ asimpl; reflexivity | symmetry; apply subst1_subst_comm ].
+    + (* c_prop: proof irrelevance commutes with substitution *)
+      (* every recursive call is on a hypothesis (hence a subterm of [h]);
+         leaving it to [eauto] lets it pick a non-subterm and the fixpoint's
+         guard check then fails *)
+      eapply c_prop.
+      1: eapply substitution_tm with (A := tprop);
+           [ eassumption | eassumption | eassumption ].
+      all: eapply substitution_tm; [ eassumption | eassumption | eassumption ].
+    + (* c_prop_u *)
+      eapply c_prop_u.
+      eapply substitution_conv with (A := tprop); eauto.
+    + (* c_tpi_prop: the [c_tpi] case with the codomains at [tprop] *)
+      cbn.
+      have EC0: ctx (Δ ++ A0[σ]).
+      { eapply c_cons; eauto;
+        eapply substitution_tm with (A:= tuniv); eauto. }
+      have EC1: ctx (Δ ++ A1[σ]).
+      { eapply c_cons; eauto;
+        eapply substitution_tm with (A:= tuniv); eauto. }
+      eapply c_tpi_prop.
+      1: eapply substitution_tm with (A:= tuniv); eauto.
+      1: eapply substitution_tm with (A:= tuniv); eauto.
+      1: eapply substitution_tm with (A:= tprop); eauto with renaming.
+      1: eapply substitution_tm with (A:= tprop); eauto with renaming.
+      1: eapply substitution_conv with (A:= tuniv); eauto.
+      1: eapply substitution_conv with (A:= tprop); eauto with renaming.
+    + (* c_unit_eta: as [c_prop], with the type fixed to [tunit] *)
+      eapply c_unit_eta.
+      all: eapply substitution_tm with (A := tunit);
+             [ eassumption | eassumption | eassumption ].
 Qed.
 
 (* ----------- context conversion -------------- *)
@@ -612,12 +1570,479 @@ Qed.
 
 (* Regularity of conversion: both sides of a conversion are well-typed at the
    common type, by induction on [conv]. *)
+(* =====================================================================
+   The types of the based-J eliminator.
+
+   [jcase C d p] has the binder-free type [app (app (app C a) b) p], so the
+   only real work is showing that this application *is* a type -- i.e. that
+   the motive, applied to the two endpoints and the proof, lands in [tuniv].
+   That is [motive_app_typing] below; [base_app_typing] is its instance at the
+   diagonal, and is exactly the second side of [c_jcase_beta].
+   ===================================================================== *)
+
+Lemma typing_weaken1 {n} (Γ : Ctx n) (M A B : Tm n) :
+  typing Γ M A -> typing Γ B tuniv -> typing (Γ ++ B) M⟨↑⟩ A⟨↑⟩.
+Proof.
+  move=> hM hB.
+  have C : ctx (Γ ++ B) by (eapply c_cons; [ eapply typing_ctx; exact hM | exact hB ]).
+  exact (renaming_typing Γ M A (Γ ++ B) shift hM (typing_renaming_shift Γ B) C).
+Qed.
+
+(* the innermost identity type of [motive_ty] *)
+Lemma motive_id_typing {n} (Γ : Ctx n) (A : Tm n) :
+  typing Γ A tuniv ->
+  typing ((Γ ++ A) ++ A⟨↑⟩)
+    (tid A⟨↑⟩⟨↑⟩ (var (shift var_zero)) (var var_zero)) tuniv.
+Proof.
+  move=> TA.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have cA1 : ctx ((Γ ++ A) ++ A⟨↑⟩) by (eapply c_cons; [ exact cA | exact TA1 ]).
+  have TA2 : typing ((Γ ++ A) ++ A⟨↑⟩) A⟨↑⟩⟨↑⟩ tuniv
+    by (eapply typing_weaken_shift; exact TA1).
+  eapply t_tid; [ exact TA2 | | ].
+  - eapply t_var'; [ reflexivity | exact cA1 ].
+  - eapply t_var'; [ reflexivity | exact cA1 ].
+Qed.
+
+(* the first and second codomains of [motive_ty], as types *)
+Lemma motive_cod1_typing {n} (Γ : Ctx n) (A : Tm n) :
+  typing Γ A tuniv ->
+  typing (Γ ++ A)
+    (tpi A⟨↑⟩ (tpi (tid A⟨↑⟩⟨↑⟩ (var (shift var_zero)) (var var_zero)) tuniv))
+    tuniv.
+Proof.
+  move=> TA.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have TId := motive_id_typing Γ A TA.
+  eapply t_tpi; [ exact TA1 | ].
+  eapply t_tpi; [ exact TId | ].
+  apply t_univ. eapply c_cons; [ eapply c_cons; [ exact cA | exact TA1 ] | exact TId ].
+Qed.
+
+Lemma motive_cod2_typing {n} (Γ : Ctx n) (A a : Tm n) :
+  typing Γ A tuniv -> typing Γ a A ->
+  typing (Γ ++ A) (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv) tuniv.
+Proof.
+  move=> TA Ta.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have Ta1 : typing (Γ ++ A) a⟨↑⟩ A⟨↑⟩ by (eapply typing_weaken1; [ exact Ta | exact TA ]).
+  have Tv : typing (Γ ++ A) (var var_zero) A⟨↑⟩
+    by (eapply t_var'; [ reflexivity | exact cA ]).
+  have TId : typing (Γ ++ A) (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv
+
+    by (eapply t_tid; [ exact TA1 | exact Ta1 | exact Tv ]).
+  eapply t_tpi; [ exact TId | ].
+  apply t_univ. eapply c_cons; [ exact cA | exact TId ].
+Qed.
+
+Lemma motive_ty_typing {n} (Γ : Ctx n) (A : Tm n) :
+  typing Γ A tuniv -> typing Γ (motive_ty A) tuniv.
+Proof.
+  move=> TA. unfold motive_ty.
+  eapply t_tpi; [ exact TA | (eapply motive_cod1_typing; exact TA) ].
+Qed.
+
+(* the motive applied to one and two arguments *)
+Lemma motive_app1_typing {n} (Γ : Ctx n) (A a C : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ C (motive_ty A) ->
+  typing Γ (app C a) (tpi A (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv)).
+Proof.
+  move=> TA Ta TC.
+  eapply t_app';
+    [ exact TA | (eapply motive_cod1_typing; exact TA) | exact TC | exact Ta | ].
+  asimpl. substify. asimpl. reflexivity.
+Qed.
+
+Lemma motive_app2_typing {n} (Γ : Ctx n) (A a b C : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ b A ->
+  typing Γ C (motive_ty A) ->
+  typing Γ (app (app C a) b) (tpi (tid A a b) tuniv).
+Proof.
+  move=> TA Ta Tb TC.
+  eapply t_app';
+    [ exact TA | (eapply motive_cod2_typing; [ exact TA | exact Ta ])
+    | (eapply motive_app1_typing; [ exact TA | exact Ta | exact TC ]) | exact Tb
+    | (asimpl; substify; asimpl; reflexivity) ].
+Qed.
+
+(* ... and to all three, which is the type of [jcase C d p]. *)
+Lemma motive_app_typing {n} (Γ : Ctx n) (A a b C p : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ b A ->
+  typing Γ C (motive_ty A) -> typing Γ p (tid A a b) ->
+  typing Γ (app (app (app C a) b) p) tuniv.
+Proof.
+  move=> TA Ta Tb TC Tp.
+  have TId : typing Γ (tid A a b) tuniv by (eapply t_tid; [ exact TA | exact Ta | exact Tb ]).
+  eapply t_app';
+    [ exact TId
+    | apply t_univ; eapply c_cons; [ eapply typing_ctx; exact TA | exact TId ]
+    | (eapply motive_app2_typing; [ exact TA | exact Ta | exact Tb | exact TC ]) | exact Tp
+    | (asimpl; substify; asimpl; reflexivity) ].
+Qed.
+
+(* The second side of [c_jcase_beta]: the base applied to the diagonal
+   witness has exactly the type that [jcase C d (rfl a)] has. *)
+Lemma base_app_typing {n} (Γ : Ctx n) (A a C d : Tm n) :
+  typing Γ A tuniv -> typing Γ a A ->
+  typing Γ C (motive_ty A) -> typing Γ d (base_ty A C) ->
+  typing Γ (app d a) (app (app (app C a) a) (rfl a)).
+Proof.
+  move=> TA Ta TC Td.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have Tv : typing (Γ ++ A) (var var_zero) A⟨↑⟩
+    by (eapply t_var'; [ reflexivity | exact cA ]).
+  have TC1 : typing (Γ ++ A) C⟨↑⟩ (motive_ty A⟨↑⟩).
+  { move: (typing_weaken1 Γ C (motive_ty A) A TC TA) => hh.
+    rewrite ren_motive_ty in hh. exact hh. }
+  have TR : typing (Γ ++ A) (rfl (var var_zero)) (tid A⟨↑⟩ (var var_zero) (var var_zero))
+
+    by (eapply t_rfl; [ exact TA1 | exact Tv ]).
+  eapply t_app';
+    [ exact TA
+    | (eapply motive_app_typing; [ exact TA1 | exact Tv | exact Tv | exact TC1 | exact TR ])
+    | exact Td | exact Ta | (asimpl; substify; asimpl; reflexivity) ].
+Qed.
+
+(* Congruence of the [jcase] result type, for the second side of [c_jcase]. *)
+Lemma motive_app_conv {n} (Γ : Ctx n) (A a b C C' p p' : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ b A ->
+  typing Γ C (motive_ty A) -> typing Γ C' (motive_ty A) ->
+  typing Γ p (tid A a b) ->
+  conv Γ C C' (motive_ty A) -> conv Γ p p' (tid A a b) ->
+  conv Γ (app (app (app C a) b) p) (app (app (app C' a) b) p') tuniv.
+Proof.
+  move=> TA Ta Tb TC TC' Tp CC Cp.
+  have TId : typing Γ (tid A a b) tuniv by (eapply t_tid; [ exact TA | exact Ta | exact Tb ]).
+  have cId : ctx (Γ ++ tid A a b)
+    by (eapply c_cons; [ eapply typing_ctx; exact TA | exact TId ]).
+  have TU : typing (Γ ++ tid A a b) tuniv tuniv by (apply t_univ; exact cId).
+  have C1 : conv Γ (app C a) (app C' a)
+              (tpi A (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv)).
+  { eapply c_app1';
+      [ exact TA | (eapply motive_cod1_typing; exact TA) | exact CC | exact Ta
+      | (asimpl; substify; asimpl; reflexivity) ]. }
+  have C2 : conv Γ (app (app C a) b) (app (app C' a) b) (tpi (tid A a b) tuniv).
+  { eapply c_app1';
+      [ exact TA | (eapply motive_cod2_typing; [ exact TA | exact Ta ]) | exact C1 | exact Tb
+      | (asimpl; substify; asimpl; reflexivity) ]. }
+  have C3 : conv Γ (app (app (app C a) b) p) (app (app (app C' a) b) p) tuniv.
+  { eapply c_app1'; [ exact TId | exact TU | exact C2 | exact Tp | reflexivity ]. }
+  have C4 : conv Γ (app (app (app C' a) b) p) (app (app (app C' a) b) p') tuniv.
+  { eapply c_app2';
+      [ exact TId | exact TU | (eapply motive_app2_typing; [ exact TA | exact Ta | exact Tb | exact TC' ])
+      | exact Cp | reflexivity ]. }
+  eapply c_trans; [ exact C3 | exact C4 ].
+Qed.
+
+Lemma conv_weaken1 {n} (Γ : Ctx n) (M N A B : Tm n) :
+  conv Γ M N A -> typing Γ B tuniv -> conv (Γ ++ B) M⟨↑⟩ N⟨↑⟩ A⟨↑⟩.
+Proof.
+  move=> hM hB.
+  have C : ctx (Γ ++ B) by (eapply c_cons; [ eapply conv_ctx; exact hM | exact hB ]).
+  exact (renaming_conv Γ M N A (Γ ++ B) shift hM (typing_renaming_shift Γ B) C).
+Qed.
+
+(* [base_ty A C] is a type, and is a congruence in the motive.  The latter is
+   what retypes the primed base of [c_jcase]: its premise gives
+   [d' : base_ty A C], while [t_jcase] on the primed side wants
+   [d' : base_ty A C']. *)
+Lemma base_ty_typing {n} (Γ : Ctx n) (A C : Tm n) :
+  typing Γ A tuniv -> typing Γ C (motive_ty A) ->
+  typing Γ (base_ty A C) tuniv.
+Proof.
+  move=> TA TC. unfold base_ty.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have Tv : typing (Γ ++ A) (var var_zero) A⟨↑⟩
+    by (eapply t_var'; [ reflexivity | exact cA ]).
+  have TC1 : typing (Γ ++ A) C⟨↑⟩ (motive_ty A⟨↑⟩).
+  { move: (typing_weaken1 Γ C (motive_ty A) A TC TA) => hh.
+    rewrite ren_motive_ty in hh. exact hh. }
+  have TR : typing (Γ ++ A) (rfl (var var_zero)) (tid A⟨↑⟩ (var var_zero) (var var_zero))
+    by (eapply t_rfl; [ exact TA1 | exact Tv ]).
+  eapply t_tpi;
+    [ exact TA
+    | eapply motive_app_typing;
+        [ exact TA1 | exact Tv | exact Tv | exact TC1 | exact TR ] ].
+Qed.
+
+Lemma base_ty_conv {n} (Γ : Ctx n) (A C C' : Tm n) :
+  typing Γ A tuniv -> typing Γ C (motive_ty A) -> typing Γ C' (motive_ty A) ->
+  conv Γ C C' (motive_ty A) ->
+  conv Γ (base_ty A C) (base_ty A C') tuniv.
+Proof.
+  move=> TA TC TC' CC. unfold base_ty.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv by (eapply typing_weaken_shift; exact TA).
+  have Tv : typing (Γ ++ A) (var var_zero) A⟨↑⟩
+    by (eapply t_var'; [ reflexivity | exact cA ]).
+  have TR : typing (Γ ++ A) (rfl (var var_zero)) (tid A⟨↑⟩ (var var_zero) (var var_zero))
+    by (eapply t_rfl; [ exact TA1 | exact Tv ]).
+  have TC1 : typing (Γ ++ A) C⟨↑⟩ (motive_ty A⟨↑⟩).
+  { move: (typing_weaken1 Γ C (motive_ty A) A TC TA) => hh.
+    rewrite ren_motive_ty in hh. exact hh. }
+  have TC1' : typing (Γ ++ A) C'⟨↑⟩ (motive_ty A⟨↑⟩).
+  { move: (typing_weaken1 Γ C' (motive_ty A) A TC' TA) => hh.
+    rewrite ren_motive_ty in hh. exact hh. }
+  have CC1 : conv (Γ ++ A) C⟨↑⟩ C'⟨↑⟩ (motive_ty A⟨↑⟩).
+  { move: (conv_weaken1 Γ C C' (motive_ty A) A CC TA) => hh.
+    rewrite ren_motive_ty in hh. exact hh. }
+  eapply c_tpi;
+    [ exact TA | exact TA
+    | eapply motive_app_typing;
+        [ exact TA1 | exact Tv | exact Tv | exact TC1 | exact TR ]
+    | eapply motive_app_typing;
+        [ exact TA1 | exact Tv | exact Tv | exact TC1' | exact TR ]
+    | apply c_refl; exact TA
+    | eapply motive_app_conv;
+        [ exact TA1 | exact Tv | exact Tv | exact TC1 | exact TC1' | exact TR
+        | exact CC1 | apply c_refl; exact TR ] ].
+Qed.
+
+(* Congruence of the [jcase] result type in the *endpoint arguments*.  Needed
+   because a J-beta redex [jcase C d (rfl a0)] is typed by the derivation at
+   [app (app (app C a) b) (rfl a0)] while [c_jcase_beta] states the
+   contraction at [app (app (app C a0) a0) (rfl a0)]. *)
+Lemma motive_app_conv_args {n} (Γ : Ctx n) (A a a' b b' C p : Tm n) :
+  typing Γ A tuniv ->
+  typing Γ a A -> typing Γ a' A -> typing Γ b A -> typing Γ b' A ->
+  typing Γ C (motive_ty A) -> typing Γ p (tid A a b) ->
+  conv Γ a a' A -> conv Γ b b' A ->
+  conv Γ (app (app (app C a) b) p) (app (app (app C a') b') p) tuniv.
+Proof.
+  move=> TA Ta Ta' Tb Tb' TC Tp Caa Cbb.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have TIdab : typing Γ (tid A a b) tuniv by (eapply t_tid; [ exact TA | exact Ta | exact Tb ]).
+  have TIda'b : typing Γ (tid A a' b) tuniv by (eapply t_tid; [ exact TA | exact Ta' | exact Tb ]).
+  have cIdab : ctx (Γ ++ tid A a b) by (eapply c_cons; [ exact cG | exact TIdab ]).
+  have cIda'b : ctx (Γ ++ tid A a' b) by (eapply c_cons; [ exact cG | exact TIda'b ]).
+  (* the motive, applied to the first argument *)
+  have C1 : conv Γ (app C a) (app C a')
+              (tpi A (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv)).
+  { eapply c_app2';
+      [ exact TA | (eapply motive_cod1_typing; exact TA) | exact TC | exact Caa
+      | (asimpl; substify; asimpl; reflexivity) ]. }
+  (* ... and to the second *)
+  have C2 : conv Γ (app (app C a) b) (app (app C a') b) (tpi (tid A a b) tuniv).
+  { eapply c_app1';
+      [ exact TA | (eapply motive_cod2_typing; [ exact TA | exact Ta ])
+      | exact C1 | exact Tb | (asimpl; substify; asimpl; reflexivity) ]. }
+  have C3 : conv Γ (app (app C a') b) (app (app C a') b') (tpi (tid A a' b) tuniv).
+  { eapply c_app2';
+      [ exact TA | (eapply motive_cod2_typing; [ exact TA | exact Ta' ])
+      | (eapply motive_app1_typing; [ exact TA | exact Ta' | exact TC ])
+      | exact Cbb | (asimpl; substify; asimpl; reflexivity) ]. }
+  (* [C2] and [C3] sit at different codomains; align [C3] along the [tid]
+     congruence in the first endpoint *)
+  have CAlign : conv Γ (tpi (tid A a' b) tuniv) (tpi (tid A a b) tuniv) tuniv.
+  { eapply c_tpi;
+      [ exact TIda'b | exact TIdab
+      | apply t_univ; exact cIda'b | apply t_univ; exact cIdab
+      | eapply c_tid;
+          [ exact TA | exact Ta' | exact Tb | apply c_refl; exact TA
+          | apply c_sym; exact Caa | apply c_refl; exact Tb ]
+      | apply c_refl; apply t_univ; exact cIda'b ]. }
+  have C3' : conv Γ (app (app C a') b) (app (app C a') b') (tpi (tid A a b) tuniv)
+    by (eapply c_conv; [ exact C3 | exact CAlign ]).
+  have C4 : conv Γ (app (app C a) b) (app (app C a') b') (tpi (tid A a b) tuniv)
+    by (eapply c_trans; [ exact C2 | exact C3' ]).
+  eapply c_app1';
+    [ exact TIdab | apply t_univ; exact cIdab | exact C4 | exact Tp | reflexivity ].
+Qed.
+
+(* The [motive_ty] spine's types, level by level.  [spine_Val] and friends hand
+   back [B0[N..]] for the [B0] read off the head-reduced Π-type, so the adequacy
+   driver needs these normal forms by name. *)
+Lemma motive_cod1_subst {n} (A a : Tm n) :
+  (tpi A⟨↑⟩ (tpi (tid A⟨↑⟩⟨↑⟩ (var (shift var_zero)) (var var_zero)) tuniv))[a..]
+  = tpi A (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv).
+Proof. asimpl. substify. asimpl. reflexivity. Qed.
+
+Lemma motive_cod2_subst {n} (A a b : Tm n) :
+  (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv)[b..] = tpi (tid A a b) tuniv.
+Proof. asimpl. reflexivity. Qed.
+
+Lemma motive_cod3_subst {n} (p : Tm n) :
+  (tuniv : Tm (S n))[p..] = tuniv.
+Proof. reflexivity. Qed.
+
+(* The spine types are congruent in their instantiating arguments.  This is the
+   syntactic half of the per-level type transports in the [J] driver's motive
+   walk: the walk's left side instantiates the motive at the witness and its
+   right side at the endpoints, so the two sides' *types* drift apart level by
+   level and have to be reconciled by [EqVal_EqVal_fwd], which wants both a
+   [conv] (these lemmas) and an [EqValTy] (the [PiEdgeEqTy] component of the
+   level above). *)
+Lemma motive_cod2_inst_conv {n} (Γ : Ctx n) (A a a' b : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ a' A -> typing Γ b A ->
+  conv Γ a a' A ->
+  conv Γ (tpi (tid A a b) tuniv) (tpi (tid A a' b) tuniv) tuniv.
+Proof.
+  move=> TA Ta Ta' Tb ca.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have TId : typing Γ (tid A a b) tuniv
+    by (eapply t_tid; [ exact TA | exact Ta | exact Tb ]).
+  have TId' : typing Γ (tid A a' b) tuniv
+    by (eapply t_tid; [ exact TA | exact Ta' | exact Tb ]).
+  have cI : ctx (Γ ++ tid A a b) by (eapply c_cons; [ exact cG | exact TId ]).
+  have cI' : ctx (Γ ++ tid A a' b) by (eapply c_cons; [ exact cG | exact TId' ]).
+  eapply c_tpi;
+    [ exact TId | exact TId'
+    | (apply t_univ; exact cI) | (apply t_univ; exact cI')
+    | (eapply c_tid;
+       [ exact TA | exact Ta | exact Tb | apply c_refl; exact TA
+       | exact ca | apply c_refl; exact Tb ])
+    | (apply c_refl; apply t_univ; exact cI) ].
+Qed.
+
+(* ... and in the second endpoint.  The [J] driver needs both: its level-2
+   composite has to be retargeted all the way to the *right* spine's type
+   [tpi (tid A a b) tuniv], because that is the only one whose [ValTy] is
+   available at the level-3 domain code -- the code's endpoints approximate
+   [a] and [b], and the witness's own data cannot reach the [b] one. *)
+Lemma motive_cod2_inst_conv2 {n} (Γ : Ctx n) (A a b b' : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ b A -> typing Γ b' A ->
+  conv Γ b b' A ->
+  conv Γ (tpi (tid A a b) tuniv) (tpi (tid A a b') tuniv) tuniv.
+Proof.
+  move=> TA Ta Tb Tb' cb.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have TId : typing Γ (tid A a b) tuniv
+    by (eapply t_tid; [ exact TA | exact Ta | exact Tb ]).
+  have TId' : typing Γ (tid A a b') tuniv
+    by (eapply t_tid; [ exact TA | exact Ta | exact Tb' ]).
+  have cI : ctx (Γ ++ tid A a b) by (eapply c_cons; [ exact cG | exact TId ]).
+  have cI' : ctx (Γ ++ tid A a b') by (eapply c_cons; [ exact cG | exact TId' ]).
+  eapply c_tpi;
+    [ exact TId | exact TId'
+    | (apply t_univ; exact cI) | (apply t_univ; exact cI')
+    | (eapply c_tid;
+       [ exact TA | exact Ta | exact Tb | apply c_refl; exact TA
+       | apply c_refl; exact Ta | exact cb ])
+    | (apply c_refl; apply t_univ; exact cI) ].
+Qed.
+
+Lemma motive_cod1_inst_conv {n} (Γ : Ctx n) (A a a' : Tm n) :
+  typing Γ A tuniv -> typing Γ a A -> typing Γ a' A -> conv Γ a a' A ->
+  conv Γ (tpi A (tpi (tid A⟨↑⟩ a⟨↑⟩ (var var_zero)) tuniv))
+         (tpi A (tpi (tid A⟨↑⟩ a'⟨↑⟩ (var var_zero)) tuniv)) tuniv.
+Proof.
+  move=> TA Ta Ta' ca.
+  have cG : ctx Γ by (eapply typing_ctx; exact TA).
+  have cA : ctx (Γ ++ A) by (eapply c_cons; [ exact cG | exact TA ]).
+  have TA1 : typing (Γ ++ A) A⟨↑⟩ tuniv
+    by (eapply typing_weaken_shift; [ exact TA | exact TA ]).
+  have Tv : typing (Γ ++ A) (var var_zero) A⟨↑⟩
+    by (eapply t_var'; [ reflexivity | exact cA ]).
+  have Ta1 : typing (Γ ++ A) a⟨↑⟩ A⟨↑⟩
+    by (eapply typing_weaken1; [ exact Ta | exact TA ]).
+  have Ta1' : typing (Γ ++ A) a'⟨↑⟩ A⟨↑⟩
+    by (eapply typing_weaken1; [ exact Ta' | exact TA ]).
+  have ca1 : conv (Γ ++ A) a⟨↑⟩ a'⟨↑⟩ A⟨↑⟩
+    by (eapply conv_weaken1; [ exact ca | exact TA ]).
+  eapply c_tpi;
+    [ exact TA | exact TA
+    | (eapply motive_cod2_typing; [ exact TA | exact Ta ])
+    | (eapply motive_cod2_typing; [ exact TA | exact Ta' ])
+    | (apply c_refl; exact TA)
+    | (eapply motive_cod2_inst_conv;
+       [ exact TA1 | exact Ta1 | exact Ta1' | exact Tv | exact ca1 ]) ].
+Qed.
+
+(* ------------------------------------------------------------------
+   Driving [jcase] to its base branch.
+
+   These three are the *syntactic* half of the adequacy driver for [J].  The
+   semantic driver learns from the logical relation that the proof [p] reduces
+   to some [rfl P0] whose witness [P0] is convertible to **both** endpoints
+   (Coquand's membership rule read off [ValId]).  Given that, [jcase C d p]
+   converts to [app d P0], and the diagonal type the [c_jcase_beta] rule
+   produces converts to the goal type -- so no Id-injectivity is needed here
+   beyond the two endpoint conversions the relation already stores.
+   ------------------------------------------------------------------ *)
+
+(* Coquand's rule as a retyping: a witness below both endpoints inhabits the
+   *off-diagonal* identity type. *)
+Lemma rfl_offdiag_typing {n} (Γ : Ctx n) (A P0 a b : Tm n) :
+  typing Γ A tuniv -> typing Γ P0 A -> typing Γ a A -> typing Γ b A ->
+  conv Γ P0 a A -> conv Γ P0 b A ->
+  typing Γ (rfl P0) (tid A a b).
+Proof.
+  move=> TA TP Ta Tb ca cb.
+  eapply t_conv; [ eapply t_rfl; [ exact TA | exact TP ] | ].
+  eapply c_tid;
+    [ exact TA | exact TP | exact TP | apply c_refl; exact TA | exact ca | exact cb ].
+Qed.
+
+(* [c_jcase_beta]'s diagonal type converts to the goal's type. *)
+Lemma motive_app_conv_witness {n} (Γ : Ctx n) (A P0 a b C p : Tm n) :
+  typing Γ A tuniv -> typing Γ P0 A -> typing Γ a A -> typing Γ b A ->
+  typing Γ C (motive_ty A) -> typing Γ p (tid A a b) ->
+  conv Γ P0 a A -> conv Γ P0 b A ->
+  conv Γ p (rfl P0) (tid A a b) ->
+  conv Γ (app (app (app C P0) P0) (rfl P0)) (app (app (app C a) b) p) tuniv.
+Proof.
+  move=> TA TP Ta Tb TC Tp ca cb cp.
+  have TRd : typing Γ (rfl P0) (tid A P0 P0)
+    by (eapply t_rfl; [ exact TA | exact TP ]).
+  have TRo : typing Γ (rfl P0) (tid A a b)
+    by (eapply rfl_offdiag_typing;
+        [ exact TA | exact TP | exact Ta | exact Tb | exact ca | exact cb ]).
+  eapply c_trans.
+  - (* move the two endpoint arguments *)
+    eapply motive_app_conv_args;
+      [ exact TA | exact TP | exact Ta | exact TP | exact Tb | exact TC | exact TRd
+      | exact ca | exact cb ].
+  - (* ... then the proof argument *)
+    eapply motive_app_conv;
+      [ exact TA | exact Ta | exact Tb | exact TC | exact TC | exact TRo
+      | apply c_refl; exact TC | apply c_sym; exact cp ].
+Qed.
+
+(* The driver conversion: [jcase C d p] converts to the base branch applied to
+   the witness, *at the goal's type*.  This is the [conv] side of the
+   [Val_beta_expand] / [EqVal_headred_expand] appeal in [st_jcase]/[sc_jcase];
+   the [HeadRed] side is [reduction.HeadRed_jcase]. *)
+Lemma jcase_drive_conv {n} (Γ : Ctx n) (A P0 a b C d p : Tm n) :
+  typing Γ A tuniv -> typing Γ P0 A -> typing Γ a A -> typing Γ b A ->
+  typing Γ C (motive_ty A) -> typing Γ d (base_ty A C) ->
+  typing Γ p (tid A a b) ->
+  conv Γ P0 a A -> conv Γ P0 b A ->
+  conv Γ p (rfl P0) (tid A a b) ->
+  conv Γ (jcase C d p) (app d P0) (app (app (app C a) b) p).
+Proof.
+  move=> TA TP Ta Tb TC Td Tp ca cb cp.
+  eapply c_trans.
+  - (* the scrutinee converts to a literal [rfl] *)
+    eapply c_jcase;
+      [ exact TA | exact Ta | exact Tb | exact TC | exact Td | exact Tp
+      | apply c_refl; exact TC | apply c_refl; exact Td | exact cp ].
+  - (* ... which contracts, and the diagonal type it lands at converts back *)
+    eapply c_conv.
+    + eapply c_jcase_beta; [ exact TA | exact TP | exact TC | exact Td ].
+    + eapply motive_app_conv_witness;
+        [ exact TA | exact TP | exact Ta | exact Tb | exact TC | exact Tp
+        | exact ca | exact cb | exact cp ].
+Qed.
+
 Lemma conv_typing {n} {Γ : Ctx n} {M N A : Tm n} :
   Γ ⊢e M ≡ N ∈ A -> Γ ⊢e M ∈ A /\ Γ ⊢e N ∈ A.
 Proof.
   induction 1;
     repeat match goal with [ H : _ /\ _ |- _ ] => destruct H end;
-    split; eauto using t_conv, t_app, t_succ, t_tpi, t_abs.
+    split; eauto using t_conv, t_app, t_succ, t_tpi, t_abs, t_fix,
+                       t_tid, t_rfl, t_jcase,
+                       t_tsig, t_mkpair, t_pfst, t_psnd.
   - (* c_app2, second side: [app N M' : B[M..]] *)
     eapply t_conv; [ eapply t_app; eauto | ].
     apply c_sym. eapply conv_subst_arg; eauto.
@@ -626,6 +2051,32 @@ Proof.
       [ eauto
       | eapply typing_subst_cons; [ asimpl; eauto | apply typing_subst_id; eauto using typing_ctx ]
       | eauto using typing_ctx ].
+  - (* c_ncase_Z, first side: [ncase zero M0 M1 : T[zero..]] *)
+    have cG : ctx Γ by (eauto using typing_ctx).
+    eapply t_case; [ eassumption | apply t_zero; exact cG | eassumption | eassumption ].
+  - (* c_ncase_S, first side: [ncase (succ N) M0 M1 : T[(succ N)..]] *)
+    eapply t_case;
+      [ eassumption | apply t_succ; eassumption | eassumption | eassumption ].
+  - (* c_ncase_S, second side: [M1[N..] : T[(succ N)..]], by substituting the
+       successor branch; [(T[rho])[N..]] is [T[(succ N)..]]. *)
+    have cG : ctx Γ by (eauto using typing_ctx).
+    have EQ : (T[rho])[N..] = T[(succ N)..] by (unfold rho; asimpl).
+    rewrite -EQ.
+    eapply substitution_tm;
+      [ eassumption
+      | eapply typing_subst_cons;
+          [ asimpl; eassumption | apply typing_subst_id; exact cG ]
+      | exact cG ].
+  - (* c_ncase, first side *)
+    eapply t_case; eassumption.
+  - (* c_ncase, second side: [ncase M' M0' M1'] is typed at the *primed* motive
+       [T[M'..]], so retype it along [conv T[M..] ≡ T[M'..]]. *)
+    have cG : ctx Γ by (eauto using typing_ctx).
+    eapply t_conv.
+    + eapply t_case; eassumption.
+    + apply c_sym. eapply conv_subst_arg;
+        [ apply t_nat; exact cG | eassumption | eassumption | eassumption
+        | eassumption ].
   - (* c_abs, second side: [abs A' M' : tpi A B] *)
     have TSm : typing_subst (Γ ++ A') var (Γ ++ A)
       by (eapply ctc_conv_typing_subst; [ eauto | eauto | apply c_sym; eauto ]).
@@ -637,6 +2088,69 @@ Proof.
     eapply t_conv; [ eapply t_abs; eauto | ].
     apply c_sym. eapply c_tpi;
       [ eauto | eauto | eauto | exact tBA' | eauto | apply c_refl; eauto ].
+  - (* c_fix, second side: [app g (fix_ g) : A], using [A⟨↑⟩[(fix_ g)..] = A] *)
+    have hfix : typing Γ (fix_ g) A by (eapply t_fix; eassumption).
+    eapply t_app' with (A := A) (B := A⟨↑⟩);
+      [ eassumption
+      | apply typing_weaken_shift; eassumption
+      | eassumption
+      | exact hfix
+      | apply subst1_shift ].
+  - (* c_rfl, second side: [rfl a' : tid A a a].  [t_rfl] types it at
+       [tid A a' a'], so retype along the [tid] congruence. *)
+    eapply t_conv;
+      [ eapply t_rfl; eauto
+      | apply c_sym; eapply c_tid; eauto using c_refl ].
+  - (* c_jcase_beta, second side: exactly [base_app_typing] *)
+    eapply (@base_app_typing _ Γ A a0 C d); eauto.
+  - (* c_jcase, second side: [t_jcase] on the primed components types
+       [jcase C' d' p'] at the *primed* result type, so retype it along the
+       congruence [motive_app_conv].  The primed base needs retyping too:
+       the premise gives [d' : base_ty A C], [t_jcase] wants
+       [d' : base_ty A C']. *)
+    have Td' : typing Γ d' (base_ty A C')
+      by (eapply t_conv; [ eauto | eapply base_ty_conv; eauto ]).
+    eapply t_conv;
+      [ eapply (@t_jcase _ Γ A a b C' d' p'); eauto
+      | apply c_sym; eapply (@motive_app_conv _ Γ A a b C C' p p'); eauto ].
+  - (* c_beta_snd, first side: [t_psnd] types [psnd (mkpair M N)] at
+       [B[(pfst (mkpair M N))..]], so retype it along [c_beta_fst] -- the
+       first projection of a literal pair is the first component. *)
+    eapply t_conv.
+    + eapply (@t_psnd _ Γ A B (mkpair M N)); eauto.
+      eapply t_mkpair; eauto.
+    + eapply (@conv_subst_arg _ Γ A B (pfst (mkpair M N)) M);
+        [ eauto | eauto
+        | eapply (@t_pfst _ Γ A B (mkpair M N)); eauto; eapply t_mkpair; eauto
+        | eauto
+        | eapply c_beta_fst; eauto ].
+  - (* c_mkpair1, second side: [N] is typed at [B[M..]] but [mkpair M' N] wants
+       [B[M'..]], so retype the second component along the argument
+       congruence. *)
+    eapply (@t_mkpair _ Γ A B M' N);
+      [ eauto | eauto | eauto
+      | eapply t_conv;
+          [ eauto | eapply (@conv_subst_arg _ Γ A B M M'); eauto ] ].
+  - (* c_psnd, second side: [t_psnd] types [psnd M'] at [B[(pfst M')..]], while
+       the rule states the type at [pfst M] -- this is the type transport the
+       rule's shape forces, along [c_pfst]. *)
+    eapply t_conv.
+    + eapply (@t_psnd _ Γ A B M'); eauto.
+    + eapply (@conv_subst_arg _ Γ A B (pfst M') (pfst M));
+        [ eauto | eauto
+        | eapply (@t_pfst _ Γ A B M'); eauto
+        | eapply (@t_pfst _ Γ A B M); eauto
+        | apply c_sym; eapply (@c_pfst _ Γ A B M M'); eauto ].
+  (* [c_prop] (proof irrelevance) needs no bullet: its two typing premises
+     are literally the two goals, so the leading [eauto] closes both. *)
+  - (* c_prop_u, first side: lift along Prop-to-U subtyping *)
+    eapply t_prop_u; eassumption.
+  - (* c_prop_u, second side *)
+    eapply t_prop_u; eassumption.
+  - (* c_tpi_prop, first side *)
+    eapply t_tpi_prop; eassumption.
+  - (* c_tpi_prop, second side *)
+    eapply t_tpi_prop; eassumption.
 Qed.
 
 Lemma ctx_conv_typing {n} (Γ:Ctx n) A A' M B :
@@ -665,45 +2179,95 @@ Qed.
 
 (** * inversion lemmas for typing *)
 
+(** With the second sort in play, the type an inversion lemma recovers is only
+    the term's principal type _up to the Prop-to-U subtyping rule_ [t_prop_u]:
+    a term typed at [tprop] can be retyped at [tuniv], and that step does not
+    go through a conversion.  So every inversion lemma whose principal type is
+    not [tuniv] concludes with a two-way alternative: either the principal type
+    is convertible to the given one, or the given one is [tuniv] (reached by
+    [t_prop_u]).  The second alternative is refuted downstream by the same
+    non-confusion facts as the first (see [adequacy.v]). *)
 Lemma typing_app_inv n (Γ : Ctx n) M N A : 
   Γ ⊢e app M N ∈ A -> 
-      exists A1 , exists A2, Γ ⊢e M ∈ tpi A1 A2 /\ Γ ⊢e N ∈ A1 /\ Γ ⊢e A2[N..] ≡ A ∈ tuniv.
+      exists A1 , exists A2, Γ ⊢e M ∈ tpi A1 A2 /\ Γ ⊢e N ∈ A1 /\
+        (Γ ⊢e A2[N..] ≡ A ∈ tuniv \/ Γ ⊢e tuniv ≡ A ∈ tuniv).
 Proof. 
   move=> h.
   dependent induction h.
   - specialize (IHh M N ltac:(eauto)).
     destruct IHh as [A1 [A2 [TM [TN CC]]]].
     exists A1. exists A2. repeat split; auto.
-    eapply c_trans; eauto.
+    destruct CC as [CC|CC]; [ left | right ]; eapply c_trans; eauto.
   - clear IHh1 IHh2 IHh3 IHh4.
     exists A. exists B. repeat split; auto.
+    left.
     eapply c_refl; eauto.
     eapply substitution_tm with (σ := N..) in h2. cbn in h2.
     eapply h2.
     eapply typing_subst_cons. asimpl. auto.
     eapply typing_subst_id. eapply typing_ctx; eauto.
     eapply typing_ctx; eauto.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    specialize (IHh M N ltac:(eauto)).
+    destruct IHh as [A1 [A2 [TM [TN _]]]].
+    exists A1. exists A2. repeat split; auto.
+    right. eapply c_refl. eapply t_univ. eapply typing_ctx; eassumption.
 Qed.
 
 Lemma typing_abs_inv n (Γ : Ctx n) M A B: 
   Γ ⊢e abs A M ∈ B -> 
-      exists B2, Γ ++ A ⊢e M ∈ B2 /\ Γ ⊢e tpi A B2 ≡ B ∈ tuniv.
+      exists B2, Γ ++ A ⊢e M ∈ B2 /\
+        (Γ ⊢e tpi A B2 ≡ B ∈ tuniv \/ Γ ⊢e tuniv ≡ B ∈ tuniv).
 Proof. 
   move=>h.
   dependent induction h.
   - specialize (IHh M A ltac:(eauto)).
     destruct IHh as [B2 [TM CC]].
     exists B2. repeat split; auto.
-    eapply c_trans; eauto.
+    destruct CC as [CC|CC]; [ left | right ]; eapply c_trans; eauto.
   - clear IHh1 IHh2 IHh3.
     exists B. repeat split; auto.
+    left.
     eapply c_refl; eauto.
     eapply t_tpi; eauto.
+  - (* t_prop_u *)
+    specialize (IHh M A ltac:(eauto)).
+    destruct IHh as [B2 [TM _]].
+    exists B2. repeat split; auto.
+    right. eapply c_refl. eapply t_univ. eapply typing_ctx; eassumption.
 Qed.
 
 (** Type inversion through conversions for the base type/numeral formers: each
     one's principal type ([tuniv] for [tuniv]/[tnat]/[tpi], [tnat] for
     [zero]/[succ]) is convertible to whatever type the term is given. *)
+
+(* Typing inversions for the identity fragment, on the model of
+   [typing_univ_inv] / [typing_abs_inv]. *)
+Lemma typing_tid_inv {n} {Γ : Ctx n} {A a b T} :
+  Γ ⊢e tid A a b ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
+Proof.
+  move=> h; dependent induction h.
+  - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
+  - apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+Qed.
+
+Lemma typing_rfl_inv {n} {Γ : Ctx n} {a T} :
+  Γ ⊢e rfl a ∈ T ->
+  exists A, Γ ⊢e a ∈ A /\ (Γ ⊢e tid A a a ≡ T ∈ tuniv \/ Γ ⊢e tuniv ≡ T ∈ tuniv).
+Proof.
+  move=> h; dependent induction h.
+  - move: (IHh a ltac:(reflexivity)) => [A0 [ta cc]].
+    exists A0. split; [ exact ta | ].
+    destruct cc as [cc|cc]; [ left | right ];
+      (eapply c_trans; [ exact cc | eassumption ]).
+  - exists A. split; [ eassumption | ]. left. apply c_refl. eapply t_tid; eauto.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    move: (IHh a ltac:(reflexivity)) => [A0 [ta _]].
+    exists A0. split; [ exact ta | ].
+    right. apply c_refl. apply t_univ. eapply typing_ctx; eassumption.
+Qed.
 
 Lemma typing_univ_inv {n} {Γ : Ctx n} {T} :
   Γ ⊢e tuniv ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
@@ -711,6 +2275,48 @@ Proof.
   move=> h; dependent induction h.
   - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
   - apply c_refl; apply t_univ; assumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+Qed.
+
+(** [tprop]'s own type inversion.  Like [typing_univ_inv] this needs no
+    alternative: [tprop : tuniv] is the only rule for it, and the [t_prop_u]
+    case's given type is literally [tuniv]. *)
+Lemma typing_prop_inv {n} {Γ : Ctx n} {T} :
+  Γ ⊢e tprop ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
+Proof.
+  move=> h; dependent induction h.
+  - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
+  - apply c_refl; apply t_univ; assumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+Qed.
+
+(** The unit fragment's two type inversions.  [tunit]'s principal type is
+    [tuniv], so it needs no alternative (as [typing_prop_inv]); [tstar]'s is
+    [tunit], so it does -- see the comment on [typing_app_inv]. *)
+Lemma typing_unit_inv {n} {Γ : Ctx n} {T} :
+  Γ ⊢e tunit ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
+Proof.
+  move=> h; dependent induction h.
+  - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
+  - (* t_prop_u: the given type is literally [tuniv].  [t_prop_u] is declared
+       before [t_unit], so it comes first here. *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_unit *)
+    apply c_refl; apply t_univ; assumption.
+Qed.
+
+Lemma typing_star_inv {n} {Γ : Ctx n} {T} :
+  Γ ⊢e tstar ∈ T -> Γ ⊢e tunit ≡ T ∈ tuniv \/ Γ ⊢e tuniv ≡ T ∈ tuniv.
+Proof.
+  move=> h; dependent induction h.
+  - first [ edestruct (IHh ltac:(reflexivity)) as [CC|CC] | edestruct IHh as [CC|CC] ];
+      [ left | right ]; (eapply c_trans; [ exact CC | eassumption ]).
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    right; apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_star *)
+    left; apply c_refl; apply t_unit; assumption.
 Qed.
 
 Lemma typing_nat_inv {n} {Γ : Ctx n} {T} :
@@ -719,30 +2325,69 @@ Proof.
   move=> h; dependent induction h.
   - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
   - apply c_refl; apply t_univ; assumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
 Qed.
 
+(** [tpi] is the one former that inhabits _both_ sorts ([t_tpi] puts it in
+    [tuniv], [t_tpi_prop] puts it in [tprop]), so its type inversion offers
+    both. *)
 Lemma typing_tpi_inv {n} {Γ : Ctx n} {A0 B0 T} :
-  Γ ⊢e tpi A0 B0 ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
+  Γ ⊢e tpi A0 B0 ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv \/ Γ ⊢e tprop ≡ T ∈ tuniv.
+Proof.
+  move=> h; dependent induction h.
+  - first [ edestruct (IHh A0 B0 ltac:(reflexivity)) as [CC|CC]
+          | edestruct IHh as [CC|CC] ];
+      [ left | right ]; (eapply c_trans; [ exact CC | eassumption ]).
+  - left; apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    left; apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_tpi_prop: the given type is literally [tprop] *)
+    right; apply c_refl; apply t_prop; eapply typing_ctx; eassumption.
+Qed.
+
+Lemma typing_tsig_inv {n} {Γ : Ctx n} {A0 B0 T} :
+  Γ ⊢e tsig A0 B0 ∈ T -> Γ ⊢e tuniv ≡ T ∈ tuniv.
 Proof.
   move=> h; dependent induction h.
   - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
   - apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
 Qed.
 
 Lemma typing_zero_inv {n} {Γ : Ctx n} {T} :
-  Γ ⊢e zero ∈ T -> Γ ⊢e tnat ≡ T ∈ tuniv.
+  Γ ⊢e zero ∈ T -> Γ ⊢e tnat ≡ T ∈ tuniv \/ Γ ⊢e tuniv ≡ T ∈ tuniv.
 Proof.
   move=> h; dependent induction h.
-  - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
-  - apply c_refl; apply t_nat; assumption.
+  - first [ edestruct (IHh ltac:(reflexivity)) as [CC|CC] | edestruct IHh as [CC|CC] ];
+      [ left | right ]; (eapply c_trans; [ exact CC | eassumption ]).
+  - left; apply c_refl; apply t_nat; assumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    right; apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
 Qed.
 
 Lemma typing_succ_inv {n} {Γ : Ctx n} {M0 T} :
-  Γ ⊢e succ M0 ∈ T -> Γ ⊢e tnat ≡ T ∈ tuniv.
+  Γ ⊢e succ M0 ∈ T -> Γ ⊢e tnat ≡ T ∈ tuniv \/ Γ ⊢e tuniv ≡ T ∈ tuniv.
 Proof.
   move=> h; dependent induction h.
-  - eapply c_trans; [ first [ eapply IHh; reflexivity | exact IHh ] | eassumption ].
-  - apply c_refl; apply t_nat; eapply typing_ctx; eassumption.
+  - first [ edestruct (IHh M0 ltac:(reflexivity)) as [CC|CC] | edestruct IHh as [CC|CC] ];
+      [ left | right ]; (eapply c_trans; [ exact CC | eassumption ]).
+  - left; apply c_refl; apply t_nat; eapply typing_ctx; eassumption.
+  - (* t_prop_u: the given type is literally [tuniv] *)
+    right; apply c_refl; apply t_univ; eapply typing_ctx; eassumption.
+Qed.
+
+(* The argument of a well-typed successor is a natural number.  (Companion to
+   [typing_succ_inv], which only recovers the principal type.) *)
+Lemma typing_succ_arg_inv {n} {Γ : Ctx n} {P T} :
+  Γ ⊢e succ P ∈ T -> Γ ⊢e P ∈ tnat.
+Proof.
+  move=> h; dependent induction h.
+  - first [ eapply IHh; reflexivity | exact IHh ].
+  - assumption.
+  - (* t_prop_u: the argument's type does not move *)
+    first [ eapply IHh; reflexivity | exact IHh ].
 Qed.
 
 

@@ -40,7 +40,32 @@ Inductive elt :=
   | zero  : elt
   | succ  : elt -> elt
   | tpi   : elt -> list (elt * elt) -> elt
-  | abs   : list (elt * elt) -> elt.
+  | abs   : list (elt * elt) -> elt
+  (* Identity fragment (Agda): [tid t u v] is the finite
+     code of [Id A a b] with [t] the type code and [u], [v] the endpoints;
+     [rfl w] is a *proof* value, the witness [w] sitting below both endpoints
+     (Coquand's rule).  Both are binder-free, hence plain [elt] arguments. *)
+  | tid   : elt -> elt -> elt -> elt
+  | rfl   : elt -> elt
+  (* Σ fragment (Agda): [tsig c g] is the code of
+     [Σ(x:A)B] -- exactly like [tpi], the second component is a function table
+     from first components to second-component codes; [mkpair x y] is a pair
+     value.  [mkpair] is the one new constructor whose *validity* needs a side
+     condition: a pair of two [bot]s carries no information, so it collapses to
+     [bot] (Agda's [Coherent (PairCode u v)] carries [Or (NotBot u) (NotBot v)],
+     the same role [~~ is_nil g] plays for [abs g]). *)
+  | tsig   : elt -> list (elt * elt) -> elt
+  | mkpair : elt -> elt -> elt
+  (* Prop fragment (Agda): [tprop] is the code of
+     the second sort.  A leaf, like [tuniv] -- all its content is in [wt],
+     where a type whose code is a member of [tprop] has only [bot] as a
+     member ([wt_prop_bot]), which is what makes proof irrelevance hold. *)
+  | tprop  : elt
+  (* Unit fragment: [tunit] is the code of the unit
+     TYPE.  There is deliberately NO element code -- [wt] adds nothing that
+     inhabits [tunit], so [bot] is its only member ([wt_unit_bot]), and that is
+     exactly what makes eta for unit hold. *)
+  | tunit  : elt.
 
 Definition is_bot (a : elt) :bool := 
   match a with 
@@ -87,6 +112,12 @@ Fixpoint rk (u : elt) : nat :=
   | succ v => 1 + rk v
   | tpi a f => 1 + (max (rk a) (_rk_fun rk f))
   | abs f => 1 + _rk_fun rk f
+  | tid t u v => 1 + (max (rk t) (max (rk u) (rk v)))
+  | rfl w => 1 + rk w
+  | tsig a f => 1 + (max (rk a) (_rk_fun rk f))
+  | mkpair x y => 1 + (max (rk x) (rk y))
+  | tprop => 1
+  | tunit => 1
   end.
 
 Notation rk_fun := (_rk_fun rk).
@@ -146,6 +177,14 @@ Fixpoint compatible u v {struct u} : bool :=
       (compatible a b) && (_compatible_fun compatible f g)
   | abs f , abs g => _compatible_fun compatible f g
   | tuniv , tuniv => true
+  | tid t u v , tid t' u' v' =>
+      (compatible t t') && (compatible u u') && (compatible v v')
+  | rfl w , rfl w' => compatible w w'
+  | tsig a f , tsig b g =>
+      (compatible a b) && (_compatible_fun compatible f g)
+  | mkpair x y , mkpair x' y' => (compatible x x') && (compatible y y')
+  | tprop , tprop => true
+  | tunit , tunit => true
   | _ , _ => false
   end.
 
@@ -184,6 +223,15 @@ Fixpoint lub (u v : elt) : elt :=
       else bot
   | abs f, abs g =>
       if compatible_fun f g then (abs (f ++ g)) else bot
+  | tid t u v, tid t' u' v' => tid (lub t t') (lub u u') (lub v v')
+  | rfl w, rfl w' => rfl (lub w w')
+  | tsig a f, tsig b g =>
+      if compatible_fun f g
+      then tsig (lub a b) (f ++ g)
+      else bot
+  | mkpair x y, mkpair x' y' => mkpair (lub x x') (lub y y')
+  | tprop, tprop => tprop
+  | tunit, tunit => tunit
   | _, _ => bot
   end.
 
@@ -195,18 +243,34 @@ Definition lub_list (xs : list elt) : elt :=
 
 Lemma rk_lub (u v : elt) : rk (lub u v) <= max (rk u) (rk v).
 Proof.
-  induction u in v |- * ; destruct v ; cbn in * ; auto.
+  induction u as [ | | | | u1 IHu1 | u1 IHu1 uf | uf
+                 | u1 IHu1 u2 IHu2 u3 IHu3 | u1 IHu1
+                 | u1 IHu1 uf | u1 IHu1 u2 IHu2 | | ] in v |- *;
+    destruct v as [ | | | | v1 | v1 vf | vf | v1 v2 v3 | v1 | v1 vf | v1 v2 | | ];
+    cbn in * ; auto.
   all: try solve [lia].
-  - specialize (IHu v).
+  - specialize (IHu1 v1).
     lia. 
   - destruct compatible_fun eqn:C ; cbn.
     2: lia.
     rewrite rk_fun_append.
-    specialize (IHu v). 
+    specialize (IHu1 v1). 
     lia.
   - destruct compatible_fun eqn:C ; cbn.
     2: lia.
     now rewrite rk_fun_append.
+  - (* tid: componentwise *)
+    specialize (IHu1 v1). specialize (IHu2 v2). specialize (IHu3 v3). lia.
+  - (* rfl *)
+    specialize (IHu1 v1). lia.
+  - (* tsig: as [tpi] *)
+    destruct compatible_fun eqn:C ; cbn.
+    2: lia.
+    rewrite rk_fun_append.
+    specialize (IHu1 v1).
+    lia.
+  - (* mkpair: componentwise *)
+    specialize (IHu1 v1). specialize (IHu2 v2). lia.
 Qed.
 
 Lemma rk_lub_list xs : rk (lub_list xs) <= List.list_max (List.map rk xs).
@@ -353,6 +417,12 @@ le (succ u') (succ v') := le u' v' ;
 le (tpi a f) (tpi a' f') := (le a a') && (@_le_fun f f' (fun x x' _ => le x x')) ;
 le tuniv tuniv => true ;
 le (abs f) (abs f') => @_le_fun f f' le ;
+le (tid t u v) (tid t' u' v') := (le t t') && (le u u') && (le v v') ;
+le (rfl w) (rfl w') := le w w' ;
+le (tsig a f) (tsig a' f') := (le a a') && (@_le_fun f f' (fun x x' _ => le x x')) ;
+le (mkpair x y) (mkpair x' y') := (le x x') && (le y y') ;
+le tprop tprop => true ;
+le tunit tunit => true ;
 le _ _ := false.
 Proof.
   all: cbn ; lia.
@@ -401,7 +471,11 @@ Proof.
   now apply le_fun_eq. 
 Qed.
 
-Remove Hints le_graph_equation_43 : le.
+(* NB: these [le_graph_equation_NN] indices SHIFT whenever [elt] gains a
+   constructor.  If [simp le]
+   starts producing the raw [_le_fun … (fun x x' _ => le x x')] form instead of
+   [le_fun], the numbers are stale: recover them with [Print HintDb le]. *)
+Remove Hints le_graph_equation_63 : le.
 Hint Rewrite le_abs : le.
 
 Lemma le_pi a f a' f' :
@@ -411,8 +485,21 @@ Proof.
   now rewrite le_fun_eq.
 Qed.
 
-Remove Hints le_graph_equation_35 : le.
+Remove Hints le_graph_equation_51 : le.
 Hint Rewrite le_pi : le.
+
+(* [tsig] is [tpi]'s twin, so it needs the same treatment: the raw Equations
+   clause exposes [_le_fun] applied to the guard-wrapped comparison, which no
+   downstream lemma is stated against. *)
+Lemma le_sig a f a' f' :
+  le (tsig a f) (tsig a' f') = (le a a') && (le_fun f f').
+Proof.
+  simp le.
+  now rewrite le_fun_eq.
+Qed.
+
+Remove Hints le_graph_equation_99 : le.
+Hint Rewrite le_sig : le.
 
 (** Strict order (still decidable): below but not equal. *)
 Definition lt u v := le u v && ~~(le v u).
@@ -548,6 +635,23 @@ Proof.
       intros.
       eapply ih ; auto.
       lia.
+    - (* tid: componentwise *)
+      move=> /andP [/andP [h1 h2] h3].
+      apply /andP; split; [ apply /andP; split | ].
+      all: eapply ih ; [ cbn in * ; lia | eassumption ].
+    - (* rfl *)
+      move=> h. eapply ih ; [ cbn in * ; lia | exact h ].
+    - (* tsig: as [tpi] *)
+      fold rk_fun in *.
+      move=> /andP [h1 h2].
+      apply /andP; split.
+      + eapply ih; eauto. lia.
+      + move: h2. eapply _compatible_fun_sym; eauto.
+        intros. eapply ih ; auto. lia.
+    - (* mkpair: componentwise *)
+      move=> /andP [h1 h2].
+      apply /andP; split.
+      all: eapply ih ; [ cbn in * ; lia | eassumption ].
 Qed.
 
 Lemma compatible_fun_sym : 
@@ -604,6 +708,19 @@ Proof.
     now eapply compatible_append.
   - destruct (compatible_fun l _) eqn:h1. 2: done.
     now eapply compatible_append.
+  - (* tid: componentwise *)
+    move: hu hv => /andP [/andP [??] ?] /andP [/andP [??] ?].
+    apply /andP; split; [ apply /andP; split | ]; eauto.
+  - (* rfl *) eauto.
+  - (* tsig: as [tpi] *)
+    move: hu hv => /andP [??] /andP [??].
+    destruct (compatible_fun l _) eqn:h1.
+    2: done.
+    apply /andP ; split ; [easy|].
+    now eapply compatible_append.
+  - (* mkpair: componentwise *)
+    move: hu hv => /andP [??] /andP [??].
+    apply /andP; split; eauto.
 Qed.
 
 Lemma compatible_append_inv f g g' :
@@ -637,6 +754,26 @@ Proof.
   - rewrite h in h'.
     destruct x ; cbn in * ; try easy.
     move: h' => /compatible_append_inv /andP [??] //.
+  - (* tid: componentwise *)
+    destruct x ; cbn in * ; try done.
+    move: h => /andP [/andP [??] ?].
+    move: h' => /andP [/andP [??] ?].
+    apply /andP; split; [ apply /andP; split | ]; eauto.
+  - (* rfl *)
+    destruct x ; cbn in * ; try done. eauto.
+  - (* tsig: as [tpi] *)
+    move: h => /andP [hu hfun].
+    rewrite hfun in h'.
+    destruct x ; cbn in * ; try easy.
+    move: h' => /andP [? hfun'].
+    apply /andP ; split.
+    1: eauto.
+    move: hfun' => /compatible_append_inv /andP [??] //.
+  - (* mkpair: componentwise *)
+    destruct x ; cbn in * ; try done.
+    move: h => /andP [??].
+    move: h' => /andP [??].
+    apply /andP; split; eauto.
 Qed.
 
 Lemma compatible_append_assoc l l' l'' :
@@ -674,12 +811,20 @@ Proof.
   all: cbn.
   1: easy.
   all: destruct v, w ; cbn in * ; try done.
-  - now f_equal.
-  - now destruct compatible_fun.
-  - move: h h' => /andP [? h] /andP [? h'].
-    rewrite h h' /= compatible_append_assoc //= app_assoc IHu //.
-  - rewrite h lub_bot_r //. 
-  - rewrite h h' //= compatible_append_assoc // app_assoc //.
+  (* One [solve] alternative per shape rather than a bullet per goal: the
+     [destruct v, w] fan-out leaves a goal count that shifts whenever [elt]
+     gains a constructor, and [all:] cannot reach goals left after a bullet
+     block.  [tsig] reuses the [tpi] alternatives, [mkpair] the [tid] one. *)
+  all: try solve
+    [ now f_equal
+    | now destruct compatible_fun
+    | (move: h h' => /andP [? h] /andP [? h'];
+       rewrite h h' /= compatible_append_assoc //= app_assoc IHu //)
+    | rewrite h lub_bot_r //
+    | rewrite h h' //= compatible_append_assoc // app_assoc //
+    | (move: h h' => /andP [/andP [??] ?] /andP [/andP [??] ?]; f_equal; eauto)
+    | (move: h h' => /andP [??] /andP [??]; f_equal; eauto)
+    | (f_equal; eauto) ].
 Qed.
 
 Lemma compatible_app f u v :
@@ -749,22 +894,22 @@ Proof.
   apply strong_ind.
   intros ? ih u u' v hrk hcomp hle.
   destruct u, u', v ; cbn in *; try done.
-  - simp le in hle.
-    eapply ih ; eauto.
-  - simp le in hle.
-    move: hcomp hle => /andP [??] /andP [??].
-    apply /andP ; split.
-    + eapply ih ; eauto.
-      lia.
-    + eapply _compatible_le_fun ; eauto.
-      intros.
-      eapply ih ; tea.
-      lia.
-  - simp le in hle.
-    eapply _compatible_le_fun ; eauto.
-    intros.
-    eapply ih ; tea.
-    lia.
+  (* one alternative per shape; [tsig] reuses [tpi]'s, [mkpair] reuses [tid]'s *)
+  all: simp le in hle.
+  all: try solve
+    [ (eapply ih ; eauto)
+    | (eapply ih ; eauto ; lia)
+    | (move: hcomp hle => /andP [??] /andP [??];
+       apply /andP ; split;
+       [ (eapply ih ; eauto ; lia)
+       | (eapply _compatible_le_fun ; eauto; intros; eapply ih ; tea ; lia) ])
+    | (eapply _compatible_le_fun ; eauto; intros; eapply ih ; tea ; lia)
+    | (move: hcomp hle => /andP [/andP [??] ?] /andP [/andP [??] ?];
+       apply /andP ; split ; [ apply /andP ; split | ];
+       solve [ eapply ih ; eauto ; lia | eapply ih ; eauto ])
+    | (move: hcomp hle => /andP [??] /andP [??];
+       apply /andP ; split;
+       solve [ eapply ih ; eauto ; lia | eapply ih ; eauto ]) ].
 Qed.
 
 (* --------------------------------------------------------- *)
@@ -849,6 +994,11 @@ Fixpoint valid u : bool :=
   | abs f => _valid_fun valid f && ~~ is_nil f
   | tpi a f => valid a && (_valid_fun valid f)
   | succ v => valid v
+  | tid t u v => valid t && valid u && valid v
+  | rfl w => valid w
+  | tsig a f => valid a && (_valid_fun valid f)
+  (* a pair must carry information in at least one component *)
+  | mkpair x y => valid x && valid y && ~~ (is_bot x && is_bot y)
   | _ => true
   end.
 
@@ -904,7 +1054,26 @@ Qed.
 Lemma valid_abs f : valid (abs f) -> valid_fun f.
 move=> /andP [h1 _]. exact h1.
 Qed.
-Hint Resolve valid_tpi1 valid_tpi2 valid_abs : valid.
+(* Σ analogues: [tsig] projects like [tpi]; [mkpair]'s validity also carries the
+   "not both bot" side condition, which [valid_mkpair3] reads back off. *)
+Lemma valid_tsig1 a g : valid (tsig a g) -> valid a.
+move=> /andP [h1 h2]. exact h1.
+Qed.
+Lemma valid_tsig2 a g : valid (tsig a g) -> valid_fun g.
+move=> /andP [h1 h2]. exact h2.
+Qed.
+Lemma valid_mkpair1 x y : valid (mkpair x y) -> valid x.
+move=> /andP [/andP [h1 _] _]. exact h1.
+Qed.
+Lemma valid_mkpair2 x y : valid (mkpair x y) -> valid y.
+move=> /andP [/andP [_ h2] _]. exact h2.
+Qed.
+Lemma valid_mkpair3 x y : valid (mkpair x y) -> ~~ (is_bot x && is_bot y).
+move=> /andP [_ h]. exact h.
+Qed.
+
+Hint Resolve valid_tpi1 valid_tpi2 valid_abs
+             valid_tsig1 valid_tsig2 valid_mkpair1 valid_mkpair2 : valid.
 
 Create HintDb valid.
 Hint Resolve
@@ -922,6 +1091,17 @@ Proof.
     eapply valid_fun_compatible; eauto.
   - move=> /andP [Vf _].
     eapply valid_fun_compatible; eauto.
+  - (* tid: componentwise *)
+    move=> /andP [/andP [??] ?].
+    apply /andP ; split ; [ apply /andP ; split | ]; auto.
+  - (* tsig: as [tpi] *)
+    move=> /andP [Vu Vf].
+    apply /andP. split; eauto using valid.
+    eapply valid_fun_compatible; eauto.
+  - (* mkpair: componentwise; the [not both bot] side condition is not needed
+       for reflexivity *)
+    move=> /andP [/andP [??] ?].
+    apply /andP ; split ; auto.
 Qed.
 
 Corollary le_compatible u v :
@@ -1077,6 +1257,26 @@ Proof.
 Qed.
 
 (** Validity is preserved by joins of compatible elements. *)
+(* A join keeps whichever component was informative.  Needed for [mkpair],
+   whose validity carries the "not both [bot]" side condition. *)
+Lemma lub_not_bot_l x x' :
+  compatible x x' -> is_bot x = false -> is_bot (lub x x') = false.
+Proof.
+  move=> hc hb.
+  destruct x, x'; cbn in * ; try done.
+  all: try solve [ (move: hc => /andP [_ ->] //) | (rewrite hc //) ].
+Qed.
+
+Lemma lub_pair_nonbot x y x' y' :
+  compatible x x' -> compatible y y' ->
+  ~~ (is_bot x && is_bot y) ->
+  ~~ (is_bot (lub x x') && is_bot (lub y y')).
+Proof.
+  move=> hcx hcy /nandP [Hx | Hy].
+  - rewrite (@lub_not_bot_l x x' hcx (negbTE Hx)) //.
+  - rewrite (@lub_not_bot_l y y' hcy (negbTE Hy)) andbF //.
+Qed.
+
 Lemma valid_lub u v :
   compatible u v -> valid u -> valid v -> valid (lub u v).
 Proof.
@@ -1085,17 +1285,24 @@ Proof.
   all: cbn in *.
   1: easy.
   all: destruct v ; cbn in * ; try easy.
-  - move: hcomp => /andP [?] /dup [? ->] /=.
-    move: Vu => /andP [??].
-    move: Vv => /andP [??].
-    rewrite IHu //=.
-    by apply valid_append.
-  - rewrite hcomp /=.
-    move: Vu => /andP [??]. move: Vv => /andP [??].
-    cbn.
-    apply /andP ; split.
-    1: by apply valid_append.
-    by destruct l.
+  (* one alternative per shape: [tsig] reuses [tpi]'s, [mkpair] needs the
+     "not both bot" side condition on top of the componentwise argument *)
+  all: try solve
+    [ (move: hcomp => /andP [?] /dup [? ->] /=;
+       move: Vu => /andP [??]; move: Vv => /andP [??];
+       rewrite IHu //=; by apply valid_append)
+    | (rewrite hcomp /=;
+       move: Vu => /andP [??]; move: Vv => /andP [??]; cbn;
+       apply /andP ; split; [ by apply valid_append | by destruct l ])
+    | (move: hcomp => /andP [/andP [??] ?];
+       move: Vu => /andP [/andP [??] ?];
+       move: Vv => /andP [/andP [??] ?];
+       apply /andP ; split ; [ apply /andP ; split | ]; eauto)
+    | (move: hcomp => /andP [hc1 hc2];
+       move: Vu => /andP [/andP [??] Nxy];
+       move: Vv => /andP [/andP [??] ?];
+       apply /andP ; split ; [ apply /andP ; split | ];
+       [ eauto | eauto | by apply lub_pair_nonbot ]) ].
 Qed.
 
 (** Applying a valid function table to a valid argument yields a valid result. *)
@@ -1140,19 +1347,27 @@ Definition le_inv_view (u u' : elt) : Type :=
   | succ v => {v' & (u' = succ v') * (le u u') }
   | tpi a b => {a' & { b' & (u' = tpi a' b') * ((le a a') * (le_fun b b')) }}
   | abs f => {f' & (u' = abs f') * (le_fun f f') }
+  | tid t v w => {t' & { v' & { w' &
+      (u' = tid t' v' w') * ((le t t') * ((le v v') * (le w w'))) }}}
+  | rfl w => {w' & (u' = rfl w') * (le w w') }
+  | tsig a b => {a' & { b' & (u' = tsig a' b') * ((le a a') * (le_fun b b')) }}
+  | mkpair x y => {x' & { y' &
+      (u' = mkpair x' y') * ((le x x') * (le y y')) }}
+  | tprop => u' = tprop
+  | tunit => u' = tunit
   end.
 
 Lemma le_inv u v : le u v -> le_inv_view u v.
 Proof.
   destruct u, v ; simp le ; cbn.
   all: try done.
-  - move => ?.
-    eexists ; repeat split.
-    now simp le.
-  - move => /andP [??].
-    by do 2 eexists ; repeat split.
-  - move => ?.
-    by eexists ; repeat split.
+  (* one alternative per shape rather than a bullet per goal: [tsig] behaves as
+     [tpi], [mkpair] as a two-component [tid] *)
+  all: try solve
+    [ (move => ?; eexists ; repeat split; now simp le)
+    | (move => /andP [??]; by do 2 eexists ; repeat split)
+    | (move => ?; by eexists ; repeat split)
+    | (move => /andP [/andP [??] ?]; by do 3 eexists ; repeat split) ].
 Qed.
 
 (* ------------------------------------------------------- *)
@@ -1535,8 +1750,19 @@ Proof.
     all: cbn in *.
     all: try solve [cbn;done].
     all: simp le.
-    2,3: move: Va => /andP [??].
-    2: apply /andP ; split.
+    (* Destructure [Va] by matching the GOAL's shape, not by goal number: the
+       numbering shifts whenever [elt] gains a constructor, and a blanket
+       [try (move: Va => /andP [/andP [??] ?])] mis-destructures [abs], whose
+       [_valid_fun valid l] unfolds to a conjunction under [cbn]. *)
+    all: try (match goal with
+              | |- is_true (le _ _ && le _ _ && le _ _) =>
+                  move: Va => /andP [/andP [??] ?]
+              | |- is_true (le _ _ && le _ _) =>
+                  move: Va => /andP [/andP [??] ?]
+              | |- is_true (le _ _ && le_fun _ _) => move: Va => /andP [??]
+              | |- is_true (le_fun _ _) => move: Va => /andP [??]
+              end).
+    all: repeat (apply /andP ; split).
     all: first [eapply le_refl | eapply le_fun_refl] ; eauto ; lia.
 
   - (* le_lub_left *)
@@ -1544,8 +1770,20 @@ Proof.
     destruct a ; cbn in *.
     1: easy.
     all: destruct b ; cbn in * ; try done.
+    (* goals: 1 (succ,bot) 2 (succ,succ) 3 (tpi,bot) 4 (tpi,tpi) 5 (abs,bot)
+       6 (abs,abs) 7 (tid,bot) 8 (tid,tid) 9 (rfl,bot) 10 (rfl,rfl)
+       11 (tsig,bot) 12 (tsig,tsig) 13 (mkpair,bot) 14 (mkpair,mkpair) *)
+    14: move: hb => /andP [/andP [??] ?].
+    14: move: ha => /andP [/andP [??] ?].
+    14: move: hcomp => /andP [??].
+    13: move: ha => /andP [/andP [??] ?].
+    12: move: hcomp => /andP [? hcomp].
+    8: move: hb => /andP [/andP [??] ?].
+    8: move: ha => /andP [/andP [??] ?].
+    8: move: hcomp => /andP [/andP [??] ?].
+    7: move: ha => /andP [/andP [??] ?].
     4: move: hcomp => /andP [? hcomp].
-    4,6: rewrite hcomp.
+    4,6,12: rewrite hcomp.
     all: simp le.
     all: erewrite ?le_refl, ?le_fun_refl ; try solve [eauto with valid | lia].
     all: erewrite ?le_lub_left, ?le_fun_extend_left ; solve [eauto with valid | lia].
@@ -1554,8 +1792,20 @@ Proof.
     move => a b RK hcomp ha hb.
     destruct a ; cbn in *.
     all: destruct b ; cbn in * ; try done.
-    5: move: hcomp => /andP [? hcomp].
-    5,6: rewrite hcomp.
+    (* goals: 1..7 (bot,succ/tpi/abs/tid/rfl/tsig/mkpair), then 8 (succ,succ)
+       9 (tpi,tpi) 10 (abs,abs) 11 (tid,tid) 12 (rfl,rfl) 13 (tsig,tsig)
+       14 (mkpair,mkpair).  One selector per goal, in descending order: a
+       multi-goal selector like [8,14:] shares one intro pattern across goals
+       of different shapes and fails. *)
+    14: move: hcomp => /andP [??]; move: ha => /andP [/andP [??] ?];
+        move: hb => /andP [/andP [??] ?].
+    13: move: hcomp => /andP [? hcomp]; rewrite hcomp.
+    11: move: hcomp => /andP [/andP [??] ?]; move: ha => /andP [/andP [??] ?];
+        move: hb => /andP [/andP [??] ?].
+    10: rewrite hcomp.
+    9: move: hcomp => /andP [? hcomp]; rewrite hcomp.
+    7: move: hb => /andP [/andP [??] ?].
+    4: move: hb => /andP [/andP [??] ?].
     all: simp le.
     all: erewrite ?le_refl, ?le_fun_refl ; try solve [eauto with valid | lia].
     all: erewrite ?le_lub_right, ?le_fun_extend_right ; solve [eauto with valid | lia].
@@ -1566,8 +1816,22 @@ Proof.
       try solve [cbn in L1; cbn in L2; done].
     all: simp le in * ; cbn in *.
     all: repeat (match goal with H : is_true (_ && _) |- _ => move: H => /andP [??] end).
-    all: erewrite ?le_trans ; cycle -2 ; eauto ; try lia => /=.
-    all: erewrite le_fun_trans ; cycle -2 ; eauto ; lia.
+    all: repeat (apply /andP ; split).
+    (* Each atomic goal [le x z] / [le_fun x z] is closed by transitivity
+       through the *unique* middle element that the two hypotheses agree on.
+       Selecting it by matching the context (rather than leaving it as an evar
+       for [eauto]) is what makes this robust: with the [tid] conjunction in
+       play, a shared evar across the [all:] block gets mis-instantiated.
+       [> ... ..] runs the tactic on each goal in isolation. *)
+    all: [> first
+      [ (match goal with
+         | [ H1 : is_true (le ?x ?y), H2 : is_true (le ?y ?z)
+             |- is_true (le ?x ?z) ] => eapply le_trans with (v := y)
+         end ; eauto ; try lia)
+      | (match goal with
+         | [ H1 : is_true (le_fun ?x ?y), H2 : is_true (le_fun ?y ?z)
+             |- is_true (le_fun ?x ?z) ] => eapply le_fun_trans with (g := y)
+         end ; eauto ; try lia) ] ..].
 
   - (* le_sup_lub *)
     move=> u v w RK LE1 LE2.
@@ -1596,6 +1860,40 @@ Proof.
       destruct (compatible_fun l l0) eqn:?. 2: done.
       simp le.
       eapply le_fun_extend; eauto.
+    + (* tid: componentwise *)
+      apply le_inv in LE1. move: LE1 => [w1 [w2 [w3 [EQ1 [L11 [L12 L13]]]]]].
+      apply le_inv in LE2. move: LE2 => [x1 [x2 [x3 [EQ2 [L21 [L22 L23]]]]]].
+      subst.
+      inversion EQ2 ; subst ; clear EQ2.
+      cbn in * ; simp le in *.
+      apply /andP ; split ; [ apply /andP ; split | ].
+      all: solve [ eapply le_sup_lub ; eauto ; lia | eapply le_sup_lub ; eauto ].
+    + (* rfl *)
+      apply le_inv in LE1. move: LE1 => [w1 [EQ1 L1]].
+      apply le_inv in LE2. move: LE2 => [x1 [EQ2 L2]].
+      subst.
+      inversion EQ2 ; subst ; clear EQ2.
+      cbn in * ; simp le in *.
+      solve [ eapply le_sup_lub ; eauto ; lia | eapply le_sup_lub ; eauto ].
+    + (* tsig: as [tpi] *)
+      apply le_inv in LE1. move: LE1 => [v1 [f1 [EQ1 [LE1 LF1]]]].
+      apply le_inv in LE2. move: LE2 => [v2 [f2 [EQ2 [LE2 LF2]]]].
+      subst.
+      inversion EQ2 ; subst ; clear EQ2.
+      cbn in *.
+      destruct (compatible_fun l l0) eqn:?. 2:done.
+      simp le.
+      apply /andP. split.
+      2: now eapply le_fun_extend.
+      eapply le_sup_lub ; eauto ; lia.
+    + (* mkpair: componentwise *)
+      apply le_inv in LE1. move: LE1 => [w1 [w2 [EQ1 [L11 L12]]]].
+      apply le_inv in LE2. move: LE2 => [x1 [x2 [EQ2 [L21 L22]]]].
+      subst.
+      inversion EQ2 ; subst ; clear EQ2.
+      cbn in * ; simp le in *.
+      apply /andP ; split.
+      all: solve [ eapply le_sup_lub ; eauto ; lia | eapply le_sup_lub ; eauto ].
 Qed.
 
 End OTL.
@@ -1740,8 +2038,9 @@ Lemma lub_bot_inv u v :
   lub u v = bot -> u = bot /\ v = bot.
 Proof.
   destruct u; destruct v; rewrite /= ; try done.
-  - move => /andP [_ ->] //=.
-  - move => -> //=.
+  (* [tsig] reuses the [tpi] alternative; [mkpair] is discharged by [try done]
+     since a join of two pairs is never [bot] *)
+  all: try solve [ (move => /andP [_ ->] //=) | (move => -> //=) ].
 Qed.
 Lemma lub_bot_inv_r u v :
   compatible u v -> lub u v = bot -> v = bot.
@@ -1784,7 +2083,7 @@ Lemma lub_succ_inv (u v w:elt) :
        * (lub u1 v1 = w))}}.
 Proof.
   destruct u; destruct v; cbn ; try done.
-  2-3: by destruct compatible_fun.
+  all: try (by destruct compatible_fun).
   move => _ _ [= <-].
   eauto.
 Qed.
@@ -1797,7 +2096,7 @@ Lemma lub_tpi_inv (u v:elt) a f :
        * (f = f1 ++ f2)%list))}}}}.
 Proof.
   destruct u; destruct v; cbn ; try done.
-  2: by destruct compatible_fun.
+  all: try (by destruct compatible_fun).
   destruct compatible_fun ; try done.
   move => _ _ [= <- <-].
   eauto 10.
@@ -1810,7 +2109,7 @@ Lemma lub_abs_inv (u v:elt) (f : list (elt * elt)) :
        * (f = f1 ++ f2))}}.
 Proof.
   destruct u; destruct v; cbn ; try done.
-  1: by destruct compatible_fun.
+  all: try (by destruct compatible_fun).
   destruct compatible_fun ; try done.
   move => _ _ [= <-].
   eauto 10.
@@ -1828,6 +2127,29 @@ Proof. by destruct u ; simp le. Qed.
 Lemma le_tuniv_inv u : le tuniv u -> u = tuniv.
 Proof. by destruct u ; simp le. Qed.
 
+Lemma le_tprop_inv u : le tprop u -> u = tprop.
+Proof. by destruct u ; simp le. Qed.
+
+(* Dual: only [bot] and [tprop] itself sit below [tprop].  This is what makes
+   "the type's code is below [tprop]" a two-case analysis in [wt_prop_bot]. *)
+Lemma le_tprop_inv_r u : le u tprop -> u = bot \/ u = tprop.
+Proof.
+  destruct u; simp le; try done; move=> _.
+  - left. reflexivity.
+  - right. reflexivity.
+Qed.
+
+(* [tunit], the unit type's code, is a leaf just like [tprop]. *)
+Lemma le_tunit_inv u : le tunit u -> u = tunit.
+Proof. by destruct u ; simp le. Qed.
+
+Lemma le_tunit_inv_r u : le u tunit -> u = bot \/ u = tunit.
+Proof.
+  destruct u; simp le; try done; move=> _.
+  - left. reflexivity.
+  - right. reflexivity.
+Qed.
+
 Lemma le_succ_inv {u v} : le (succ u) v -> { w & (v = succ w) * (le u w) }.
 Proof. destruct v ; simp le ; try done. move=> h. by exists v. Qed.
 
@@ -1839,6 +2161,57 @@ Lemma le_abs_inv {v f} :
   le (abs f) v -> { g & (v = abs g) * (le_fun f g) }.
 Proof. destruct v ; simp le ; try done. move=> h. by exists l. Qed.
 
+(* Identity fragment: the order is componentwise on type codes and on proofs,
+   so both inversions just read the components back off. *)
+Lemma le_tid_inv {w t u v} :
+  le (tid t u v) w ->
+  { t' & { u' & { v' &
+      (w = tid t' u' v') * ((le t t') * ((le u u') * (le v v'))) }}}.
+Proof.
+  destruct w ; simp le ; try done.
+  move=> /andP [/andP [??] ?]. by exists w1, w2, w3.
+Qed.
+
+Lemma le_rfl_inv {v w} :
+  le (rfl w) v -> { w' & (v = rfl w') * (le w w') }.
+Proof. destruct v ; simp le ; try done. move=> h. by exists v. Qed.
+
+(* introduction form, for clients that do not import Equations' [simp] *)
+Lemma le_rfl_intro {w w'} : le w w' -> le (rfl w) (rfl w').
+Proof. simp le. Qed.
+
+(* Σ fragment: the order is [tpi]-like on type codes and componentwise on
+   pairs, so both inversions just read the components back off. *)
+Lemma le_tsig_inv {v a f} :
+  le (tsig a f) v -> { b & { g & (v = tsig b g) * ((le a b) * (le_fun f g)) }}.
+Proof. destruct v ; simp le ; try done. move=> /andP [??]. by exists v, l. Qed.
+
+Lemma le_mkpair_inv {w x y} :
+  le (mkpair x y) w ->
+  { x' & { y' & (w = mkpair x' y') * ((le x x') * (le y y')) }}.
+Proof.
+  destruct w ; simp le ; try done.
+  move=> /andP [??]. by exists w1, w2.
+Qed.
+
+Lemma le_mkpair_intro {x y x' y'} :
+  le x x' -> le y y' -> le (mkpair x y) (mkpair x' y').
+Proof. move=> h1 h2. simp le. by apply /andP. Qed.
+
+(* Dual of [le_mkpair_inv]: only [bot] and pairs sit below a pair code.  Used
+   to see that an approximation of a Sigma-typed term has pair shape. *)
+Lemma le_mkpair_inv_r u x y :
+  le u (mkpair x y) -> u = bot \/ exists x' y', u = mkpair x' y'.
+Proof.
+  destruct u; simp le; try done; move=> _.
+  - left. reflexivity.
+  - right. eauto.
+Qed.
+
+Lemma valid_tsig_intro a f :
+  valid a -> valid_fun f -> valid (tsig a f).
+Proof. move=> Va Vf. by apply /andP. Qed.
+
 Lemma valid_tpi_intro a f :
   valid a -> valid_fun f -> valid (tpi a f).
 Proof. move=> Va Vf. by apply /andP. Qed.
@@ -1847,7 +2220,7 @@ Lemma valid_tpi_inv a f :
   valid (tpi a f) -> valid a /\ valid_fun f.
 Proof. by move=> /andP [??]. Qed.
 
-(* Inductive (cons-recursive) version of [app], now total. *)
+(* Inductive (cons-recursive) version of [app]. *)
 Fixpoint app_alt (f : list (elt * elt)) (u : elt) : elt :=
   match f with
   | nil => bot
@@ -1862,7 +2235,7 @@ Proof.
   - ext. rewrite app_cons_eq. cbn [app_alt]. rewrite IHf //.
 Qed.
 
-(* [app f u] always exists now; this restates that it is valid. *)
+(* [app f u] is valid whenever [f] and [u] are. *)
 Lemma valid_app_exists {f u} :
   valid_fun f -> valid u -> { w & (app f u = w) * valid w }.
 Proof. move=> Vf Vu. exists (app f u). split=> //. by apply valid_app. Qed.
@@ -1871,8 +2244,7 @@ Lemma app_tpi_exists a f u :
   valid (tpi a f) -> valid u -> { t & (app f u = t) * valid t }.
 Proof. move=> V Vu. exists (app f u). split=> //. exact (@app_tpi_valid a f u V Vu). Qed.
 
-(* The old [compatible_app_inv] split a successful application of an
-   appended function. In the total setting this is [app_append_eq]. *)
+(* Application of an appended function; a restatement of [app_append_eq]. *)
 Lemma compatible_app_inv f g u :
   valid_fun f -> valid_fun g -> valid u -> compatible_fun f g ->
   { vf & { vg & (app f u = vf) * ((app g u = vg) * (lub vf vg = app (f ++ g) u)) }}.
@@ -1882,7 +2254,7 @@ Proof.
   symmetry. by apply app_append_eq.
 Qed.
 
-(* Rewrite lemmas for [le] on [succ]/[tpi] (the old names). *)
+(* Rewrite lemmas for [le] on [succ]/[tpi]. *)
 Lemma le_succ u v : le (succ u) (succ v) = le u v.
 Proof. by simp le. Qed.
 
@@ -1890,7 +2262,7 @@ Lemma le_tpi a f b g :
   le (tpi a f) (tpi b g) = (le a b) && (le_fun f g).
 Proof. apply le_pi. Qed.
 
-(* Downward closure of compatibility (the old [comp_down]); this is
+(* Downward closure of compatibility; this is
    just [compatible_le] with the arguments reordered. *)
 Lemma comp_down u u' v : le u u' -> compatible u' v -> compatible u v.
 Proof. move=> LE C. eapply compatible_le ; eassumption. Qed.
@@ -1915,7 +2287,7 @@ Lemma valid_elt x y f :
   valid_fun f -> In (x,y) f -> valid x /\ valid y.
 Proof. move=> Vf In. exact: (valid_fun_subterms_prop f Vf x y In). Qed.
 
-(* The old [valid_app_compatible]: [app f u] exists, is valid, and is
+(* [app f u] exists, is valid, and is
    coherent with every entry of [f] whose key is below [u]. *)
 Lemma valid_app_compatible f u :
   valid_fun f -> valid u ->
@@ -1980,8 +2352,7 @@ Qed.
 
 
 (* ------------------------------------------------------------ *)
-(* Restore the implicit-argument behaviour that these lemmas had
-   under the old [Set Implicit Arguments] (removed from this file).
+(* Make the leading arguments of these lemmas implicit.
    Placed at the end of the module so that the explicit-argument
    uses in the proofs above are unaffected; only downstream callers
    (which apply these lemmas positionally to hypotheses) see the

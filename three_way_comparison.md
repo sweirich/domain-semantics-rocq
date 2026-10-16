@@ -14,9 +14,9 @@ an ideal closed under head reduction.
 
 ## Scope and provenance
 
-| | Rocq `finelt` | Agda `MIN`/`NAT` | Lean  |
+| | Rocq `finelt` | Agda `MIN`/`NAT`/`ID`/`SigmaProp` | Lean  |
 |--|--|--|--|
-| Object theory | minimal: type-in-type (`wt tuniv tuniv`), Π, naturals (`ncase`) | minimal: Π + U (MIN); + naturals `Case`/`Y` (NAT) | the **actual Lean 4 kernel**: predicative universes, Π, inductives, definitional unfolding, proof irrelevance |
+| Object theory | type-in-type (`wt tuniv tuniv`), Π, naturals (`ncase`), `Y`, `Id` with based `J`, Σ (+ surjective pairing), unit (+ η), `Prop` (proof irrelevance) | minimal: Π + U (MIN); + naturals `Case`/`Y` (NAT); + `Id`/`J` (ID); + Σ and `Prop` (SigmaProp) | the **actual Lean 4 kernel**: predicative universes, Π, inductives, definitional unfolding, proof irrelevance |
 | Universes | single `tuniv` (type-in-type) | single `U` (type-in-type) | full hierarchy `SLevel` with `imax`, `Sort u` |
 | Purpose | port/experiment | reference formalization | verified Lean kernel |
 
@@ -29,19 +29,19 @@ several rows are one-to-many.
 | | Rocq | Agda | Lean |
 |--|--|--|--|
 | Raw syntax + substitution | `syntax/syntax.v` | `Syntax/Raw.agda`, `Syntax/Substitution.agda` | `SExpr.lean` |
-| Typing & conversion | `syntax/typing.v` | `Syntax/Typing.agda` | `SExpr.lean` |
+| Typing & conversion | `syntax/typing.v` (minimal presentation: `syntax/minimal_typing.v`) | `Syntax/Typing.agda` | `SExpr.lean` |
 | Reduction | `syntax/reduction.v`, `syntax/relations.v` | `Syntax/Reduction.agda` | `SExpr.lean` |
 | Value domain | `finelt/findom.v` | `Domain/Basic.agda`, `Domain/Order*.agda`, `Domain/Rank.agda` | `ShapeLogRel.lean` |
-| Membership | `finelt/types.v` | `Domain/Membership.agda`, `Domain/Mem*.agda` | `ShapeLogRel.lean` |
+| Membership | `finelt/types.v` (minimal presentation: `finelt/minimal_types.v`) | `Domain/Membership.agda`, `Domain/Mem*.agda` | `ShapeLogRel.lean` |
 | Selection | `finelt/selection.v` | `Model/Selection.agda`, `Model/SelectionRank.agda` | `ShapeLogRel.lean` |
 | Evaluation relation | `finelt/raw_semantics.v` | `Model/Eval.agda` | `ShapeLogRel.lean` |
 | Evaluation ∘ substitution | `finelt/eval_substitution.v` | `Model/EvalSubstitution.agda` | `ShapeLogRel.lean` |
 | Typed PER | `finelt/raw_validity.v` | `Validity/*.agda` | `ShapeLogRel.lean` |
 | Soundness | `finelt/typing_semantics.v` | `Model/Soundness.agda`, `Model/SoundnessLemmas.agda` | `ShapeLogRelAdequacy.lean` |
 | Adequacy | `finelt/adequacy.v` | `Adequacy/*.agda` (`Adequacy/Bundle.agda`) | `ShapeLogRelAdequacy.lean` |
-| Pi injectivity | `finelt/adequacy.v` | `PiInjectivity.agda` | `ShapeLogRelAdequacy.lean` |
+| Pi (and Id, Σ) injectivity | `finelt/adequacy.v` | `PiInjectivity.agda` | `ShapeLogRelAdequacy.lean` |
 | Subject reduction | `finelt/adequacy.v` | `SubjectReduction.agda` | — |
-| Utilities | `finelt/utils.v`, `theories/utils/` | `Domain/Kernel.agda` | (Lean4Lean core) |
+| Utilities | `finelt/utils.v`, `utils/` | `Domain/Kernel.agda` | (Lean4Lean core) |
 
 ---
 
@@ -49,25 +49,32 @@ several rows are one-to-many.
 
 ## 1.1 Terms
 
-| | Rocq [syntax/syntax.v](syntax/syntax.v) `Tm` | Agda `Syntax/Raw.agda` `Expr` | Lean `SExpr.lean` `SExpr` |
+| | Rocq [syntax/syntax.v](src/syntax/syntax.v) `Tm` | Agda `Syntax/Raw.agda` `Expr` | Lean `SExpr.lean` `SExpr` |
 |--|--|--|--|
 | variables | `var : fin n → Tm n` (intrinsically scoped) | `Var : Fin n → Expr n` (intrinsically scoped) | `bvar : Nat → SExpr` (de Bruijn, extrinsic scope) |
 | universe | `tuniv` | `U` | `sort : SLevel → SExpr` |
 | Π | `tpi : Tm n → Tm (S n) → Tm n` | `Pi : Expr n → Expr (suc n) → Expr n` | `forallE : SExpr → SExpr → SExpr` |
 | λ | `abs : Tm n → Tm (S n) → Tm n` | `Lam : Expr n → Expr (suc n) → Expr n` | `lam : SExpr → SExpr → SExpr` |
 | app | `app : Tm n → Tm n → Tm n` | `App : Expr n → Expr n → Expr n` | `app : SExpr → SExpr → SExpr` |
-| naturals | `tnat`, `zero`, `succ`, `ncase M M0 M1` | `NatT`, `Zero`, `Suc`, `Case M a b`, `Y g` | (inductives, general) `const c ls` |
+| naturals | `tnat`, `zero`, `succ`, `ncase M M0 M1`, `fix_ g` | `NatT`, `Zero`, `Suc`, `Case M a b`, `Y g` | (inductives, general) `const c ls` |
+| identity | `tid A a b`, `rfl a`, `jcase C d p` | `Id A a b`, `Ref a`, `J C d p` | (inductive `Eq`, general) |
+| Σ | `tsig A B`, `mkpair M N`, `pfst M`, `psnd M` | `Sigma A B`, `MkPair`, `Fst`, `Snd` | (structures, general) |
+| unit / Prop | `tunit`, `tstar`; `tprop` | `Prop` | `sort .zero` (`Prop`) |
 | other | — | — | `const : Name → List SLevel → SExpr` (constants/inductives) |
 
 - Rocq and Agda are **intrinsically scoped** (`Tm n` / `Expr n`), so terms are
   well-scoped by construction and substitution is total. Lean's `SExpr` is
   **untyped/unscoped** (`bvar : Nat`) with scoping enforced by the judgments.
-- Rocq mechanizes substitution/renaming Autosubst-style ([syntax/syntax.v](syntax/syntax.v));
+- Rocq mechanizes substitution/renaming Autosubst-style ([syntax/syntax.v](src/syntax/syntax.v));
   Agda hand-rolls it (`Syntax/Substitution.agda`); Lean defines `inst`/`lift`/`subst`
   on the raw `SExpr` (`SExpr.lean`).
-- Naturals: Rocq uses a **case combinator** `ncase` (recently migrated from a
-  recursor `nrec`); Agda-`NAT` uses `Case` + a fixpoint `Y`; Lean subsumes
-  naturals under **general inductive types** (`const`/`indTy`).
+- Naturals: Rocq and Agda-`NAT` both use a **case combinator** (`ncase` /
+  `Case`) together with a fixpoint `Y` (`fix_` / `Y`) in place of a recursor;
+  Lean subsumes naturals under **general inductive types** (`const`/`indTy`).
+- Identity types, Σ and `Prop`: Rocq follows the Agda `ID` and `SigmaProp`
+  developments (based `J`, Σ with surjective pairing, a proof-irrelevant
+  second sort). Rocq additionally has a unit type with η, whose only semantic
+  inhabitant is `bot`.
 
 ## 1.2 The typing and conversion judgments — the big structural split
 
@@ -77,7 +84,7 @@ This is where the three differ most.
 conversion (definitional-equality) relation, mutually defined.
 
 ```coq
-(* Rocq: theories/examples/syntax/typing.v — mutual Inductive *)
+(* Rocq: src/syntax/typing.v — mutual Inductive *)
 Inductive typing : ∀ {n}, Ctx n → Tm n → Tm n → Prop := …   (* Γ ⊢ M ∈ A *)
 with       conv   : ∀ {n}, Ctx n → Tm n → Tm n → Tm n → Prop := …   (* Γ ⊢ M ≡ N ∈ A *)
 with       ctx    : ∀ {n}, Ctx n → Prop := …
@@ -113,7 +120,7 @@ Consequences of the split:
 | congruence | `c_app1`/`c_app2`, `c_abs`, `c_tpi` | `conv-App-fun`/`-arg`, `conv-Pi`, (Lam via funext) | `appDF`, `lamDF`, `forallEDF` (one rule each, both sides move) |
 | β / η | `c_beta` / `c_eta` | `conv-beta` / `conv-funext` | `beta` / `eta` |
 | conversion rule | `t_conv` (typing) + `c_conv` | `ty-conv` + `conv-conv` | `defeqDF` |
-| extras | — | — | `proofIrrel`, `const`, `extra` (δ/defeq unfolding) |
+| extras | `c_prop` (proof irrelevance), `c_unit_eta`, `c_pair_eta` | proof irrelevance for `Prop`, Σ η | `proofIrrel`, `const`, `extra` (δ/defeq unfolding) |
 
 The Lean presentation is the **"PER over syntax" / typed-equality** style
 (Abel–Coquand–style), which is why its congruence rules (`lamDF`, `forallEDF`)
@@ -122,13 +129,19 @@ typing judgment plus a separate congruence closure. A visible symptom: Rocq
 keeps an explicit `c_abs` (λ-congruence) rule while Agda derives it from
 `conv-funext`; Lean has `lamDF` directly.
 
+Many premises of the Rocq rules are presuppositions kept only because the
+adequacy proof wants the derivations. [syntax/minimal_typing.v](src/syntax/minimal_typing.v)
+gives the minimal rules (`mtyping`/`mconv`/`mctx`) and proves them equivalent
+to the originals (`mtyping_iff`, `mconv_iff`, `mctx_iff`).
+
 ## 1.3 Reduction
 
 | | Rocq | Agda | Lean |
 |--|--|--|--|
-| head reduction | `HeadRed1`/`HeadRed` ([syntax/reduction.v](syntax/reduction.v)) | `HeadRed1`/`HeadRed` (`Syntax/Reduction.agda`) | `⤳` / `⤳*` (`WHRedS`, SExpr.lean) |
+| head reduction | `HeadRed1`/`HeadRed` ([syntax/reduction.v](src/syntax/reduction.v)) | `HeadRed1`/`HeadRed` (`Syntax/Reduction.agda`) | `⤳` / `⤳*` (`WHRedS`, SExpr.lean) |
 | β rule | `hr_beta` | `headred-beta` | (kernel whnf) |
-| nat rules | `hr_zero`/`hr_succ`/`hr_case` | `headred-case-zero/-suc/-case`, `headred-Y` | (ι-reduction, general) |
+| nat rules | `hr_zero`/`hr_succ`/`hr_case`, `hr_fix` | `headred-case-zero/-suc/-case`, `headred-Y` | (ι-reduction, general) |
+| J / Σ rules | `hr_jcase`/`hr_jcase_scrut`; `hr_pfst`/`hr_psnd` (+ `_scrut`) | `J` reduction; `headred-beta-fst`/`-snd`, `headred-fst`/`-snd` | (ι/projection reduction, general) |
 | WHNF | Π/base are `HeadRed1`-normal | likewise | `WHNF Γ e := ∀ e', ¬ Γ ⊢ e ⤳ e'` |
 | **Π determinacy** | `HeadRed_tpi_det` | `HeadRed-unique-Pi` / `HeadRed-strip-Pi` | `WHNF.forallE.whRedS` |
 
@@ -148,7 +161,7 @@ The domain and the relation line up closely across all three.
 A *function value is a finite list of input→output pairs*; Π and λ carry such a
 graph; there is a least element `bot`.
 
-| | Rocq [findom.v](finelt/findom.v) `elt` | Agda `Domain/Basic.agda` `FinEl` | Lean `ShapeLogRel.lean` `Shape n` |
+| | Rocq [findom.v](src/finelt/findom.v) `elt` | Agda `Domain/Basic.agda` `FinEl` | Lean `ShapeLogRel.lean` `Shape n` |
 |--|--|--|--|
 | bottom | `bot` | `Bot` | `Shape.bot` |
 | universe code | `tuniv` | `UCode` | `sort (rel : Bool)` |
@@ -156,9 +169,12 @@ graph; there is a least element `bot`.
 | λ value | `abs (f : list (elt*elt))` | `FunEl (f : FinFun)` | `lam (f : ShapeFun n)` |
 | function graph | `list (elt * elt)` | `FinFun = List (Pair FinEl FinEl)` | `ShapeFun n = List (Shape n × Shape n)` |
 | nat codes | `tnat`, `zero`, `succ` | `NatCode`, `ZeroEl`, `SucEl` (NAT) | `ctor`/`indTy` (general) |
+| Id codes | `tid t u v`, `rfl w` | `IdCode t u v`, `RefEl w` (ID) | `ctor`/`indTy` (general) |
+| Σ codes | `tsig a g` (graph, like `tpi`), `mkpair x y` | `SigmaCode a f`, `PairCode u v` (SigmaProp) | `ctor`/`indTy` (general) |
+| Prop / unit codes | `tprop`; `tunit` (only `bot` inhabits a Prop type or the unit type) | `PropCode` (SigmaProp) | — |
 | trivial function | `nil` / `singleton` | `[(Bot,Bot)]`-style | `ShapeFun.bot = [(.bot,.bot)]` |
 | well-formed value | `valid : elt → bool` (side condition) | `Coherent`/`FinMem` side conditions | `WShape n = {s : Shape n // s.WF}` |
-| membership / "wt" | `wt : elt → elt → Prop` ([types.v](finelt/types.v)) | `FinMem : FinEl → FinEl → Set` | `WShape.HasType : WShape → WShape → Prop` |
+| membership / "wt" | `wt : elt → elt → Prop` ([types.v](src/finelt/types.v); minimal form `mwt`, [minimal_types.v](src/finelt/minimal_types.v)) | `FinMem : FinEl → FinEl → Set` | `WShape.HasType : WShape → WShape → Prop` |
 | order | `le : elt → elt → bool` | `LeCode` (Set) + `leFinEl` (Nat) | `≤` on `Shape`/`WShape` |
 | join | `lub : elt → elt → elt` | `Sup : FinEl → FinEl → FinEl` | (join on shapes) |
 | apply graph | `app : list(elt*elt) → elt → elt` | `EvalFun : FinFun → FinEl → FinEl` | `WShapeFun.app` |
@@ -178,7 +194,7 @@ lemmas; Rocq uses a **single** `elt` with global fuel and one stability lemma
 The heart of each LR is a relation "term `M` is approximated by value `m` in
 environment `ρ`", defined by recursion on the term. Compare the clauses:
 
-**Rocq** — `EvalRel : Tm n → Env n → elt → Prop` ([raw_semantics.v](finelt/raw_semantics.v)):
+**Rocq** — `EvalRel : Tm n → Env n → elt → Prop` ([raw_semantics.v](src/finelt/raw_semantics.v)):
 ```coq
 EvalRel (var i)   ρ b := valid b ∧ le b (ρ i)
 EvalRel tuniv     ρ b := le b tuniv
@@ -232,13 +248,20 @@ The differences are cosmetic: Lean folds `bot`-approximation in as a
 via `le`/`LeCode`. Agda mediates the λ-edges through an explicit `Selection`;
 Rocq bundles that into `EvalRel_fun`; Lean via `WShape.HasDom`/`f.app`.
 
+The extensions follow the same pattern in Rocq and Agda. `ncase` and `jcase`
+evaluate the scrutinee to some value and require the result to lie below the
+selected branch; `fix_ g` is the union over a Kleene index of the approximants
+(`Approx`), each step a single-edge application of `g`; `tid` and `tsig` are
+type formers evaluated exactly like `tpi`; `rfl` and `mkpair` are value formers
+like `abs`.
+
 ## 2.3 The typed PER (definitional-equality relation)
 
 On top of evaluation, each builds a **partial equivalence relation on terms**
 indexed by a type, closed under head reduction — the semantic counterpart of the
 syntactic `≡`.
 
-| | Rocq [raw_validity.v](finelt/raw_validity.v) | Agda `Validity/Core.agda` | Lean `ShapeLogRel.lean` |
+| | Rocq [raw_validity.v](src/finelt/raw_validity.v) | Agda `Validity/Core.agda` | Lean `ShapeLogRel.lean` |
 |--|--|--|--|
 | unary | `Val M A (h : wt u a)` | `Val2` | (diagonal of `LR.DefEq`) |
 | binary | `EqVal M N A h` | `EqVal2` | `LR … .DefEq M N A m a` |
@@ -265,12 +288,14 @@ LR), then reads off metatheory.
 | "trivial Π value" | `evalRel_Pi_trivial : EvalRel (tpi B1 F1) ρ (tpi bot nil)` | `evalRel-Pi-trivial` | `LE_Interp … (forallE .bot [(.bot,.bot)]) (.forallE B₁ F₁)` |
 | reduce-to-Π | `piConv` | `piConv`/`convPi2` | `forallE_whRed_l` |
 | **Pi injectivity** | `piInjectivity` | `piInjectivity` | `forallE_inv` |
+| Id / Σ injectivity | `idInjectivity` (via `idConv`), `sigmaInjectivity` (via `sigmaConv`) | Id-injectivity (ID) | (general inductive injectivity) |
 | finish | `HeadRed_tpi_det` | `HeadRed-unique-Pi` | `WHNF.forallE.whRedS` |
 
 The Pi-injectivity endgame is identical in all three: interpret the
 known Π at the **bottom Π value** (domain `⊥`, graph `[(⊥,⊥)]`), transport along
 the conversion via adequacy, obtain a head reduction of the other side to a Π,
-and close by Π head-normal-form determinacy.
+and close by Π head-normal-form determinacy. Rocq repeats the same argument
+one former along for `Id` and Σ.
 
 ---
 
@@ -282,10 +307,12 @@ and close by Π head-normal-form determinacy.
    shape of the congruence/β/η rules but not the models.
 
 2. **Object theory.** Lean models the full Lean 4 kernel (universe levels,
-   inductives, δ-unfolding, proof irrelevance); Rocq and Agda model a minimal
-   type-in-type + Π (+ naturals) calculus. Hence Lean additionally needs
+   inductives, δ-unfolding, proof irrelevance); Rocq and Agda model a
+   type-in-type + Π calculus extended with fixed, built-in formers (naturals
+   with `Y`, `Id`, Σ, `Prop`, and in Rocq also unit). Hence Lean additionally needs
    `sort_inv` (level injectivity) and `sort_forallE_inv`; Rocq/Agda only need
-   base "no-confusion" facts (`tnat_not_tpi`, `tuniv_not_tpi`).
+   base "no-confusion" facts (`tnat_not_tpi`, `tuniv_not_tpi`, and their
+   analogues for `tid`, `tsig`, `tprop`, `tunit`).
 
 3. **Stratification.** Agda (`Stage`) and Lean (`Shape : Nat → Type`) index the
    value domain and the PER by a level/stage and carry `lift`/`shift` lemmas.
